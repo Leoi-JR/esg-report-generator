@@ -1,0 +1,1503 @@
+"""
+align_evidence.py
+=================
+ESG 双证据融合对齐脚本：将路径编码（先验）与语义向量检索（后验）交叉验证，
+输出三类状态的对齐表：
+  ✅ 一致：路径编码在语义 Top-K 内，直接采用
+  ⚠️  疑似错位：路径有编码但语义不匹配，需人工确认
+  🔍 无路径标签但语义命中：兜底文件夹文件，自动建议归属
+
+开发进度：
+  阶段一（完成）：加载清单映射 + 扫描文件
+  阶段二（完成）：文本提取与分块 → src/extractors.py
+  阶段三（完成）：embedding 构建 → build_indicator_queries / compute_embeddings /
+                                    build_indicator_collection / embed_chunks /
+                                    save_emb_cache / load_emb_cache
+  阶段四（完成）：语义检索 + 一致性判断 → semantic_search_batch / classify_consistency /
+                                           align_chunks / print_phase4_summary
+  阶段五（完成）：输出对齐表 → write_alignment_excel / print_phase5_summary
+
+阶段二缓存机制：
+  - 阶段 2a 文本提取结果写入 SECTION_CACHE_PATH（JSON 文件），下次运行直接加载，跳过重提取
+  - 阶段 2b 分块结果写入 CHUNK_CACHE_PATH（JSON 文件），下次运行直接加载，跳过重分块
+  - 阶段三 chunk embedding 写入 EMB_CACHE_PATH（numpy .npz），下次运行直接加载，跳过重算
+  - 设 FORCE_REEXTRACT=True 强制忽略所有缓存，重新提取、分块和计算
+  - 设 FORCE_RECHUNK=True 仅强制重新分块（复用 sections 缓存），适用于修改分块参数后
+
+运行方式：
+    python3 src/align_evidence.py
+"""
+
+import os
+import sys
+import time
+import numpy as np
+from tqdm import tqdm
+
+# 将 src/ 加入 sys.path，以便 import 同目录的脚本模块
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+from esg_utils import (
+    CODE_REGEX,
+    DIMENSION_META,
+    should_skip_file,
+    should_skip_content,
+    extract_all_codes_from_string,
+)
+from data_list_v2 import load_esg_mapping_from_reference_excel, find_best_code_in_path
+from generate_folder_structure import load_full_esg_info
+from extractors import (
+    configure_glmocr,
+    configure_vlm,
+    configure_vlm_context,
+    load_vlm_cache,
+    save_vlm_cache,
+    extract_pdf,
+    extract_docx,
+    extract_doc,
+    extract_xlsx,
+    extract_xls,
+    extract_pptx,
+    extract_ppt,
+    extract_image,
+    extract_sections,
+    make_chunks_from_sections,
+    chunk_params,
+)
+
+from config import (
+    GLM_OCR_BASE_URL,
+    GLM_OCR_MODEL,
+    VLM_BASE_URL,
+    VLM_MODEL,
+    OPENAI_API_KEY,
+    OPENAI_BASE_URL,
+    EMBEDDING_MODEL,
+    EMBEDDING_INSTRUCT,
+    EMBEDDING_TOP_K,
+    CONSISTENCY_TOPN,
+    EXTRA_RELEVANCE_THRESHOLD,
+    MIN_RELEVANCE_SCORE,
+    CHROMA_PERSIST_DIR,
+    ENHANCED_QUERY_PATH,
+    SECTION_CACHE_PATH,
+    CHUNK_CACHE_PATH,
+    EMB_CACHE_PATH,
+    VLM_CACHE_PATH,
+    FORCE_REEXTRACT,
+    FORCE_RECHUNK,
+)
+
+
+# ==============================================================================
+# 用户配置：只改这里
+# ==============================================================================
+_HERE = os.path.dirname(os.path.abspath(__file__))  # src/ 目录
+_ROOT = os.path.dirname(_HERE)                       # 项目根目录
+
+COMPANY_NAME    = "艾森股份"
+TARGET_FOLDER   = os.path.join(_ROOT, "data/processed/模拟甲方整理后资料")
+REFERENCE_EXCEL = os.path.join(_ROOT, "data/raw/资料收集清单-to艾森/【艾森股份】1-【定性】ESG报告资料清单.xlsx")
+OUTPUT_DIR      = os.path.join(_ROOT, "data/processed")
+# 算法参数、服务地址、模型名统一在 src/config.py 中管理
+# ==============================================================================
+
+
+# ==============================================================================
+# 阶段一 — 函数一：加载指标详情映射
+# ==============================================================================
+
+def load_indicator_details(reference_excel_path: str) -> dict:
+    """
+    从参考清单构建完整指标映射，包含 requirement 字段。
+
+    返回：
+        {
+            code: {
+                "topic":       str,  # 议题
+                "indicator":   str,  # 指标
+                "requirement": str,  # 资料需求描述（阶段三用于拼接 embedding 查询文本）
+            },
+            ...
+        }
+    共 189 条（对应清单中全部定性指标）。
+    """
+    full_info_list = load_full_esg_info(reference_excel_path)
+
+    details = {}
+    for item in full_info_list:
+        code = item["code"]
+        details[code] = {
+            "topic":       item.get("topic", ""),
+            "indicator":   item.get("indicator", ""),
+            "requirement": item.get("requirement", ""),
+        }
+    return details
+
+
+# ==============================================================================
+# 阶段一 — 函数二：扫描目标文件夹，生成文件记录列表
+# ==============================================================================
+
+def scan_target_files(target_folder: str, esg_mapping: dict) -> list:
+    """
+    遍历 target_folder，为每个有效文件生成一条 FileRecord。
+
+    FileRecord 字段：
+        file_path      - 绝对路径
+        relative_path  - 相对 target_folder 的路径
+        file_name      - 文件名（含扩展名）
+        folder_code    - 从路径提取的最优 ESG 编码（兜底文件夹为 None）
+        extension      - 小写扩展名（如 ".pdf"、".docx"）
+
+    过滤规则：
+        - should_skip_file()：系统文件、隐藏文件（. 或 ~ 开头）、Thumbs.db 等
+        - should_skip_content()：ESG 资料清单文件本身
+        - 📋说明.txt：文件夹模板遗留的说明文件，跳过
+    """
+    file_records = []
+
+    for current_root, dirs, files in os.walk(target_folder):
+        dirs.sort()
+        files.sort()
+
+        for filename in files:
+            if should_skip_file(filename):
+                continue
+            if should_skip_content(filename):
+                continue
+            if filename == "📋说明.txt":
+                continue
+
+            abs_path   = os.path.join(current_root, filename)
+            rel_path   = os.path.relpath(abs_path, target_folder)
+            path_parts = rel_path.split(os.sep)
+
+            best_code, _part, _idx, _in_map = find_best_code_in_path(path_parts, esg_mapping)
+            _, ext = os.path.splitext(filename)
+
+            file_records.append({
+                "file_path":     abs_path,
+                "relative_path": rel_path,
+                "file_name":     filename,
+                "folder_code":   best_code,
+                "extension":     ext.lower(),
+            })
+
+    return file_records
+
+
+# ==============================================================================
+# 阶段一 — 打印摘要
+# ==============================================================================
+
+def print_phase1_summary(esg_mapping: dict, indicator_details: dict,
+                         file_records: list) -> None:
+    """打印阶段一的统计摘要到控制台。"""
+    req_nonempty = sum(
+        1 for v in indicator_details.values() if v.get("requirement", "").strip()
+    )
+
+    ext_counter: dict = {}
+    for rec in file_records:
+        raw_ext = rec["extension"]
+        display = raw_ext.lstrip(".").upper() if raw_ext else "无后缀"
+        ext_counter[display] = ext_counter.get(display, 0) + 1
+
+    sorted_exts = sorted(ext_counter.items(), key=lambda x: -x[1])
+    top_exts    = sorted_exts[:6]
+    others      = sum(cnt for _, cnt in sorted_exts[6:])
+
+    ext_parts = [f"{name}: {cnt}" for name, cnt in top_exts]
+    if others > 0:
+        ext_parts.append(f"其他: {others}")
+
+    fallback_count = sum(1 for rec in file_records if rec["folder_code"] is None)
+
+    print(f"  ✓ 加载 {len(indicator_details)} 个指标编码"
+          f"（含 requirement 字段：{req_nonempty} 条非空）")
+    print(f"  ✓ 扫描到 {len(file_records)} 个文件")
+    print(f"    {', '.join(ext_parts)}")
+    print(f"  ✓ 兜底文件夹文件（folder_code=None）: {fallback_count} 个")
+
+
+# ==============================================================================
+# 阶段二缓存 — 读写 chunk_records（JSON 持久化）
+# ==============================================================================
+
+def save_chunks_cache(chunk_records: list, cache_path: str) -> None:
+    """
+    将 chunk_records 序列化为 JSON 写入 cache_path。
+    文件不存在时自动创建；写入失败时打印警告，不中断主流程。
+    """
+    import json
+    try:
+        os.makedirs(os.path.dirname(cache_path), exist_ok=True)
+        with open(cache_path, "w", encoding="utf-8") as f:
+            json.dump(chunk_records, f, ensure_ascii=False, indent=2)
+        size_mb = os.path.getsize(cache_path) / 1024 / 1024
+        print(f"  ✓ chunk 缓存已写入：{cache_path}（{size_mb:.1f} MB，{len(chunk_records)} 条）")
+    except Exception as e:
+        print(f"  [警告] chunk 缓存写入失败：{e}")
+
+
+def load_chunks_cache(cache_path: str) -> list | None:
+    """
+    从 cache_path 读取已缓存的 chunk_records。
+    文件不存在或解析失败时返回 None（触发重新提取）。
+    """
+    import json
+    if not os.path.exists(cache_path):
+        return None
+    try:
+        with open(cache_path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        if not isinstance(data, list):
+            print(f"  [警告] 缓存文件格式异常（非列表），将重新提取")
+            return None
+        return data
+    except Exception as e:
+        print(f"  [警告] 缓存文件读取失败：{e}，将重新提取")
+        return None
+
+
+# ==============================================================================
+# 阶段 2a 缓存 — 读写 sections（JSON 持久化，按 relative_path 分组）
+# ==============================================================================
+
+def save_sections_cache(all_sections: dict, cache_path: str) -> None:
+    """
+    将 {relative_path: [section_dicts]} 序列化为 JSON 写入 cache_path。
+    文件不存在时自动创建；写入失败时打印警告，不中断主流程。
+    """
+    import json
+    try:
+        os.makedirs(os.path.dirname(cache_path), exist_ok=True)
+        with open(cache_path, "w", encoding="utf-8") as f:
+            json.dump(all_sections, f, ensure_ascii=False, indent=2)
+        size_mb = os.path.getsize(cache_path) / 1024 / 1024
+        total_secs = sum(len(v) for v in all_sections.values())
+        print(f"  ✓ sections 缓存已写入：{cache_path}（{size_mb:.1f} MB，"
+              f"{len(all_sections)} 个文件，{total_secs} 个 sections）")
+    except Exception as e:
+        print(f"  [警告] sections 缓存写入失败：{e}")
+
+
+def load_sections_cache(cache_path: str) -> dict | None:
+    """
+    从 cache_path 读取已缓存的 sections。
+    返回 {relative_path: [section_dicts]} 或 None（触发重新提取）。
+    """
+    import json
+    if not os.path.exists(cache_path):
+        return None
+    try:
+        with open(cache_path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        if not isinstance(data, dict):
+            print(f"  [警告] sections 缓存格式异常（非 dict），将重新提取")
+            return None
+        return data
+    except Exception as e:
+        print(f"  [警告] sections 缓存读取失败：{e}，将重新提取")
+        return None
+
+
+# ==============================================================================
+# 阶段三缓存 — 读写 chunk embedding（numpy .npz 持久化）
+# ==============================================================================
+
+def save_emb_cache(chunk_records_with_emb: list, cache_path: str) -> None:
+    """
+    将 chunk embedding 向量矩阵以 numpy .npz 压缩格式写入 cache_path。
+
+    存储内容：
+        embeddings - float32 矩阵 (N, dim)，N = chunk 数量，dim = 向量维度
+        valid_mask - bool 数组 (N,)，标记每条 embedding 是否有效
+
+    embedding 为 None 的条目（空文本 chunk）→ 全零向量 + valid_mask[i] = False。
+    写入失败时打印警告，不中断主流程。
+    """
+    try:
+        n = len(chunk_records_with_emb)
+        if n == 0:
+            print("  [警告] embedding 缓存：无记录，跳过写入")
+            return
+
+        # 从第一条有效 embedding 推断维度
+        dim = 0
+        for rec in chunk_records_with_emb:
+            emb = rec.get("embedding")
+            if emb is not None and len(emb) > 0:
+                dim = len(emb)
+                break
+        if dim == 0:
+            print("  [警告] embedding 缓存：无有效 embedding，跳过写入")
+            return
+
+        matrix = np.zeros((n, dim), dtype=np.float32)
+        mask = np.zeros(n, dtype=bool)
+
+        for i, rec in enumerate(chunk_records_with_emb):
+            emb = rec.get("embedding")
+            if emb is not None and len(emb) > 0:
+                matrix[i] = emb
+                mask[i] = True
+
+        os.makedirs(os.path.dirname(cache_path), exist_ok=True)
+        np.savez_compressed(cache_path, embeddings=matrix, valid_mask=mask)
+
+        size_mb = os.path.getsize(cache_path) / 1024 / 1024
+        valid_count = int(mask.sum())
+        print(f"  ✓ embedding 缓存已写入：{cache_path}")
+        print(f"    （{size_mb:.1f} MB，{n} 条，{valid_count} 有效）")
+    except Exception as e:
+        print(f"  [警告] embedding 缓存写入失败：{e}")
+
+
+def load_emb_cache(cache_path: str, expected_count: int) -> list | None:
+    """
+    从 cache_path 读取已缓存的 chunk embedding。
+
+    参数：
+        cache_path      - .npz 文件路径
+        expected_count  - 期望的 chunk 数量（与 chunk_records 长度一致）
+
+    返回：
+        List[list | None]，长度 == expected_count。
+        valid_mask=False 的位置返回 None，valid_mask=True 的位置返回 list[float]。
+        文件不存在 / 数量不匹配 / 读取异常 → 返回 None（触发重新计算）。
+    """
+    if not os.path.exists(cache_path):
+        return None
+    try:
+        data = np.load(cache_path)
+        embeddings = data["embeddings"]  # (N, dim) float32
+        valid_mask = data["valid_mask"]  # (N,) bool
+
+        if embeddings.shape[0] != expected_count:
+            print(f"  [提示] embedding 缓存条数不一致"
+                  f"（缓存 {embeddings.shape[0]} vs 当前 {expected_count}），将重新计算")
+            return None
+
+        result = []
+        for i in range(expected_count):
+            if valid_mask[i]:
+                result.append(embeddings[i].tolist())
+            else:
+                result.append(None)
+        return result
+    except Exception as e:
+        print(f"  [警告] embedding 缓存读取失败：{e}，将重新计算")
+        return None
+
+
+# ==============================================================================
+# 打印脚本标题
+# ==============================================================================
+
+def print_header() -> None:
+    """打印脚本启动标题横幅。"""
+    print("═" * 39)
+    print(f"  ESG 双证据融合对齐 — {COMPANY_NAME}")
+    print("═" * 39)
+    print()
+
+
+def print_config_summary() -> None:
+    """
+    打印本次运行的关键配置项，帮助开发者在日志开头快速核查配置是否正确。
+    只打印"容易改错或直接影响本次运行路径"的配置，算法阈值等不打印。
+    """
+    sec_cache_exists = os.path.exists(SECTION_CACHE_PATH)
+    sec_cache_status = (f"存在（{os.path.getsize(SECTION_CACHE_PATH)/1024/1024:.1f} MB）"
+                        if sec_cache_exists else "不存在（将重新提取）")
+
+    cache_exists = os.path.exists(CHUNK_CACHE_PATH)
+    cache_status = (f"存在（{os.path.getsize(CHUNK_CACHE_PATH)/1024/1024:.1f} MB）"
+                    if cache_exists else "不存在（将重新分块）")
+
+    emb_cache_exists = os.path.exists(EMB_CACHE_PATH)
+    emb_cache_status = (f"存在（{os.path.getsize(EMB_CACHE_PATH)/1024/1024:.1f} MB）"
+                        if emb_cache_exists else "不存在（将重新计算）")
+
+    print("[配置摘要]")
+    print(f"  公司名称        : {COMPANY_NAME}")
+    print(f"  资料文件夹      : {TARGET_FOLDER}")
+    print(f"  参考清单        : {REFERENCE_EXCEL}")
+    print(f"  输出目录        : {OUTPUT_DIR}")
+    print(f"  {'─' * 37}")
+    print(f"  强制重新提取    : {'⚠️  是（FORCE_REEXTRACT=True）' if FORCE_REEXTRACT else '否'}")
+    print(f"  强制重新分块    : {'⚠️  是（FORCE_RECHUNK=True）' if FORCE_RECHUNK else '否'}")
+    print(f"  Sections 缓存   : {sec_cache_status}")
+    print(f"  分块缓存状态    : {cache_status}")
+    print(f"  Embedding 缓存状态: {emb_cache_status}")
+    print(f"  {'─' * 37}")
+    print(f"  Embedding 服务  : {OPENAI_BASE_URL}")
+    print(f"  Embedding 模型  : {EMBEDDING_MODEL}")
+    print(f"  VLM 服务        : {VLM_BASE_URL}")
+    print(f"  VLM 模型        : {VLM_MODEL}")
+    print(f"  ChromaDB 路径   : {CHROMA_PERSIST_DIR}")
+    print()
+
+
+# ==============================================================================
+# 阶段三 — 函数一：构建指标查询文本
+# ==============================================================================
+
+def build_indicator_queries(indicator_details: dict) -> dict:
+    """
+    为每个指标编码构造语义密度高的查询文本，供 embedding 计算使用。
+
+    优先级：
+      1. 若 ENHANCED_QUERY_PATH 文件存在且该编码有增强文本 → 使用 LLM 生成的
+         embedding 友好型描述（包含关键词、同义词、典型资料类型）
+      2. 否则回退到原始公式："{code} {topic} {indicator}：{requirement[:500]}"
+
+    返回：
+        {code: query_text}  共 189 条，每条均为非空字符串。
+    """
+    import json as _json
+
+    # 尝试加载 LLM 增强文本
+    enhanced = {}
+    if os.path.isfile(ENHANCED_QUERY_PATH):
+        try:
+            with open(ENHANCED_QUERY_PATH, "r", encoding="utf-8") as f:
+                enhanced = _json.load(f)
+            print(f"  ✓ 加载 {len(enhanced)} 条增强查询文本（{ENHANCED_QUERY_PATH}）")
+        except Exception as e:
+            print(f"  [警告] 加载增强查询文本失败：{e}，将使用原始公式")
+
+    queries = {}
+    enhanced_count = 0
+    fallback_count = 0
+
+    for code, info in indicator_details.items():
+        # 优先使用增强文本
+        enh_text = enhanced.get(code, "").strip()
+        if enh_text:
+            # 增强文本前加上编码，确保编码始终出现在查询中
+            queries[code] = f"{code} {enh_text}"
+            enhanced_count += 1
+        else:
+            # 回退到原始公式
+            topic       = info.get("topic", "").strip()
+            indicator   = info.get("indicator", "").strip()
+            requirement = info.get("requirement", "").strip()[:500]
+
+            parts = [p for p in [code, topic, indicator] if p]
+            base  = " ".join(parts)
+
+            if requirement:
+                query = f"{base}：{requirement}"
+            else:
+                query = base
+
+            queries[code] = query
+            fallback_count += 1
+
+    if enhanced:
+        print(f"    增强文本：{enhanced_count} 条，原始公式回退：{fallback_count} 条")
+
+    return queries
+
+
+# ==============================================================================
+# 阶段三 — 函数二：批量计算 Embedding（通用，供指标和 chunk 共用）
+# ==============================================================================
+
+def compute_embeddings(
+    texts: list,
+    api_key: str,
+    base_url: str,
+    model: str,
+    batch_size: int = 100,
+    label: str = "",
+) -> list:
+    """
+    批量调用 OpenAI 兼容 Embedding API，返回与输入等长的向量列表。
+
+    参数：
+        texts      - 待 embedding 的文本列表
+        api_key    - API 密钥
+        base_url   - API 端点（OpenAI 兼容）
+        model      - 模型名称（如 "text-embedding-3-large"）
+        batch_size - 每批最多条数，默认 100（防止 token 超限）
+        label      - 进度打印前缀（如 "指标" 或 "chunk"）
+
+    返回：
+        List[List[float]]，长度与 texts 相同。
+        单批失败时对应位置填充零向量（长度由 model 决定，未知时填 []），打印警告。
+
+    重试策略：每批最多重试 3 次，等待 1s / 2s / 4s（指数退避）。
+    空列表输入时直接返回空列表，不发起任何 API 调用。
+    """
+    if not texts:
+        return []
+
+    try:
+        from openai import OpenAI
+    except ImportError:
+        print("  [错误] 未安装 openai 库，请执行：pip install openai")
+        return [[] for _ in texts]
+
+    client  = OpenAI(api_key=api_key, base_url=base_url)
+    results = [None] * len(texts)
+    total   = len(texts)
+    n_batch = (total + batch_size - 1) // batch_size
+
+    desc = f"  embedding{' ' + label if label else ''}"
+    pbar = tqdm(range(n_batch), desc=desc, unit="批",
+                ncols=80, dynamic_ncols=False)
+
+    for b in pbar:
+        start = b * batch_size
+        end   = min(start + batch_size, total)
+        batch = texts[start:end]
+        pbar.set_postfix_str(f"{end}/{total} 条", refresh=False)
+
+        success = False
+        for attempt in range(3):
+            try:
+                resp = client.embeddings.create(model=model, input=batch)
+                for j, emb_obj in enumerate(resp.data):
+                    results[start + j] = emb_obj.embedding
+                success = True
+                break
+            except Exception as e:
+                wait = 2 ** attempt  # 1s, 2s, 4s
+                tqdm.write(f"  [警告] 批次 {b + 1} 第 {attempt + 1} 次失败：{e}，"
+                           f"{'重试' if attempt < 2 else '放弃'}（等待 {wait}s）")
+                time.sleep(wait)
+
+        if not success:
+            for j in range(len(batch)):
+                results[start + j] = []
+
+    pbar.close()
+    return results
+
+
+# ==============================================================================
+# 阶段三 — 函数三：构建指标向量库（ChromaDB，持久化）
+# ==============================================================================
+
+def build_indicator_collection(
+    indicator_queries: dict,
+    indicator_details: dict,
+    api_key: str,
+    base_url: str,
+    model: str,
+    persist_dir: str,
+    company_name: str,
+):
+    """
+    计算 189 个指标查询文本的 embedding，存入 ChromaDB 持久化 collection。
+
+    Collection 名称："{company_name}_indicators"（如 "艾森股份_indicators"）。
+
+    复用逻辑：
+        若 collection 已存在且 count() == len(indicator_queries)，
+        直接返回，跳过 embedding 计算（节省 API 调用）。
+        否则删除旧 collection，重建。
+
+    ChromaDB 存储格式：
+        ids       = [编码, ...]          如 ["GA1", "GA2", ...]
+        embeddings= [向量, ...]
+        metadatas = [{"code": ..., "topic": ..., "indicator": ...}, ...]
+
+    返回：已填充的 chromadb.Collection 对象，供阶段四 query() 使用。
+    """
+    try:
+        import chromadb
+    except ImportError:
+        print("  [错误] 未安装 chromadb 库，请执行：pip install chromadb")
+        return None
+
+    os.makedirs(persist_dir, exist_ok=True)
+    client = chromadb.PersistentClient(path=persist_dir)
+
+    # ChromaDB collection 名只允许 [a-zA-Z0-9._-]，将中文公司名转为 ASCII slug
+    # 全中文名经替换后可能变为空字符串，此时用 "esg" 作为 fallback
+    import re as _re
+    _slug = _re.sub(r'[^a-zA-Z0-9._-]', '-', company_name).strip('-')
+    if not _slug:
+        _slug = "esg"
+    collection_name = f"{_slug}_indicators"
+    expected_count  = len(indicator_queries)
+
+    # 复用检测：collection 存在且条数一致 → 直接返回
+    try:
+        existing = client.get_collection(collection_name)
+        if existing.count() == expected_count:
+            print(f"  ✓ 指标 embedding 已缓存（{expected_count} 条），跳过重建")
+            return existing
+        else:
+            print(f"  [提示] 缓存条数不一致（{existing.count()} vs {expected_count}），重建中...")
+            client.delete_collection(collection_name)
+    except Exception:
+        pass  # collection 不存在，直接创建
+
+    collection = client.create_collection(
+        name     = collection_name,
+        metadata = {"hnsw:space": "cosine"},  # 余弦相似度
+    )
+
+    codes  = list(indicator_queries.keys())
+    texts  = [indicator_queries[c] for c in codes]
+
+    # 指标 query 侧加 instruct 前缀（Qwen3-Embedding 推荐用法）
+    # document/chunk 侧不加，保持非对称结构
+    if EMBEDDING_INSTRUCT:
+        texts = [f"Instruct: {EMBEDDING_INSTRUCT}\nQuery: {t}" for t in texts]
+
+    metas  = [
+        {
+            "code":      c,
+            "topic":     indicator_details.get(c, {}).get("topic", ""),
+            "indicator": indicator_details.get(c, {}).get("indicator", ""),
+        }
+        for c in codes
+    ]
+
+    embeddings = compute_embeddings(texts, api_key, base_url, model, label="指标")
+
+    # 过滤零向量（API 失败的条目），避免 ChromaDB 拒绝空向量
+    valid_ids  = []
+    valid_embs = []
+    valid_meta = []
+    for i, (c, emb) in enumerate(zip(codes, embeddings)):
+        if emb:
+            valid_ids.append(c)
+            valid_embs.append(emb)
+            valid_meta.append(metas[i])
+        else:
+            print(f"  [警告] 指标 {c} embedding 为空，已跳过（不存入 ChromaDB）")
+
+    if valid_ids:
+        collection.add(ids=valid_ids, embeddings=valid_embs, metadatas=valid_meta)
+
+    print(f"  ✓ {len(valid_ids)} 个指标 embedding 已存入 ChromaDB")
+    return collection
+
+
+# ==============================================================================
+# 阶段三 — 函数四：计算文本块 Embedding（内存驻留，不持久化）
+# ==============================================================================
+
+def embed_chunks(
+    chunk_records: list,
+    api_key: str,
+    base_url: str,
+    model: str,
+) -> list:
+    """
+    为每个 chunk_record 追加 "embedding" 字段，返回增强后的新列表。
+    原始 chunk_records 不被修改。
+
+    向量化使用 chunk["text"] 字段（子块文本，不用 parent_text）。
+    char_count == 0 的 chunk（空文本）embedding 设为 None，跳过 API 调用。
+
+    返回：
+        List[dict]，每条在原 ChunkRecord 基础上追加：
+            "embedding": List[float] | None
+    """
+    # 分离有效 chunk（有文本）和空 chunk（无文本）
+    valid_indices = [i for i, c in enumerate(chunk_records) if c.get("char_count", 0) > 0]
+    valid_texts   = [chunk_records[i]["text"] for i in valid_indices]
+
+    # 批量计算有效 chunk 的 embedding
+    if valid_texts:
+        embeddings = compute_embeddings(valid_texts, api_key, base_url, model, label="chunk")
+    else:
+        embeddings = []
+
+    # 组装结果，空 chunk 填 None
+    emb_map = {valid_indices[j]: embeddings[j] for j in range(len(valid_indices))}
+
+    result = []
+    for i, chunk in enumerate(chunk_records):
+        new_chunk = dict(chunk)
+        new_chunk["embedding"] = emb_map.get(i, None)
+        result.append(new_chunk)
+
+    return result
+
+
+# ==============================================================================
+# 阶段四 — 函数一：批量语义检索
+# ==============================================================================
+
+def semantic_search_batch(
+    chunk_records_with_emb: list,
+    indicator_collection,             # chromadb.Collection | None
+    top_k: int = EMBEDDING_TOP_K,
+) -> list:
+    """
+    批量对所有 chunk 做 ChromaDB query，返回每条的语义 Top-K。
+
+    参数：
+        chunk_records_with_emb - 含 "embedding" 字段的 chunk 列表
+        indicator_collection   - ChromaDB Collection 对象（cosine space）
+        top_k                  - 每个 chunk 返回的候选指标数
+
+    返回：
+        List[List[Tuple[str, float]]]，与输入等长。
+        每条为 [(code, similarity), ...]，按 score 降序。
+        无效 embedding（None / 零向量 / 空列表）对应位置为 []。
+
+    注意：
+        - indicator_collection 为 None 时打印警告，全部返回 []
+        - 所有 embedding 均无效时不调用 query()
+        - 距离→相似度：similarity = 1.0 - distance（cosine space）
+    """
+    n = len(chunk_records_with_emb)
+    results = [[] for _ in range(n)]
+
+    if indicator_collection is None:
+        print("  [警告] indicator_collection 为 None，跳过语义检索")
+        return results
+
+    # 筛选有效 embedding 的索引
+    valid_indices = []
+    valid_embeddings = []
+    for i, rec in enumerate(chunk_records_with_emb):
+        emb = rec.get("embedding")
+        if emb is None:
+            continue
+        if not isinstance(emb, list) or len(emb) == 0:
+            continue
+        if sum(abs(v) for v in emb) <= 1e-9:
+            continue
+        valid_indices.append(i)
+        valid_embeddings.append(emb)
+
+    if not valid_indices:
+        return results
+
+    # 分批查询（ChromaDB/SQLite 对单次 query 的变量数有上限）
+    QUERY_BATCH_SIZE = 5000
+    all_ids_batched = {}       # j → ids list
+    all_distances_batched = {} # j → distances list
+
+    for batch_start in range(0, len(valid_embeddings), QUERY_BATCH_SIZE):
+        batch_end = min(batch_start + QUERY_BATCH_SIZE, len(valid_embeddings))
+        batch_embs = valid_embeddings[batch_start:batch_end]
+        try:
+            qr = indicator_collection.query(
+                query_embeddings=batch_embs,
+                n_results=top_k,
+            )
+        except Exception as e:
+            print(f"  [警告] ChromaDB query 批次 {batch_start}-{batch_end} 失败：{e}")
+            continue
+        for local_j in range(len(batch_embs)):
+            global_j = batch_start + local_j
+            all_ids_batched[global_j] = qr["ids"][local_j] if qr.get("ids") else []
+            all_distances_batched[global_j] = qr["distances"][local_j] if qr.get("distances") else []
+
+    # 解析结果，按原始索引回填
+    for j, orig_idx in enumerate(valid_indices):
+        ids       = all_ids_batched.get(j, [])
+        distances = all_distances_batched.get(j, [])
+        topk = []
+        for code, dist in zip(ids, distances):
+            similarity = 1.0 - dist
+            topk.append((code, similarity))
+        results[orig_idx] = topk
+
+    return results
+
+
+# ==============================================================================
+# 阶段四 — 函数二：一致性判定（纯函数）
+# ==============================================================================
+
+def classify_consistency(
+    folder_code: str | None,
+    semantic_topk: list,               # [(code, score), ...]
+    topn: int = CONSISTENCY_TOPN,
+    extra_threshold: float = EXTRA_RELEVANCE_THRESHOLD,
+    min_relevance: float = MIN_RELEVANCE_SCORE,
+) -> tuple[str, str, str | None]:
+    """
+    纯函数，判定单个 chunk 的一致性状态。
+
+    参数：
+        folder_code     - 路径编码（None 表示兜底文件夹）
+        semantic_topk   - 语义检索结果 [(code, score), ...]
+        topn            - 路径编码需在 Top-N 内才算一致
+        extra_threshold - 额外关联阈值（严格大于）
+        min_relevance   - 最低相关度阈值（top1 score < 此值 → 低相关）
+
+    返回：
+        (status_emoji, status_desc, suggested_code)
+
+    六分支判定树：
+        1. semantic_topk 为空：
+           - folder_code != None → ("❓", "有路径编码但无语义验证", folder_code)
+           - folder_code == None → ("❓", "无任何证据", None)
+        2. top1 score < min_relevance（低相关，与任何指标都不密切）
+           → ("➖", "低相关", folder_code or topk[0][0])
+        3. folder_code == None + 语义有结果
+           → ("🔍", "无路径标签但语义命中", topk[0][0])
+        4. folder_code ∈ top_n_codes
+           - 有其他 code with score > extra_threshold → ("➕", "一致且有额外关联", folder_code)
+           - 无 → ("✅", "一致", folder_code)
+        5. folder_code ∉ top_n_codes
+           → ("⚠️", "疑似错位", topk[0][0])
+    """
+    # 分支 1：语义无结果
+    if not semantic_topk:
+        if folder_code is not None:
+            return ("❓", "有路径编码但无语义验证", folder_code)
+        else:
+            return ("❓", "无任何证据", None)
+
+    # 分支 2：top1 score 低于最低相关度 → 低相关
+    top1_score = semantic_topk[0][1] if semantic_topk else 0
+    if top1_score < min_relevance:
+        return ("➖", "低相关", folder_code or semantic_topk[0][0])
+
+    # 分支 3：无路径标签但语义有结果
+    if folder_code is None:
+        return ("🔍", "无路径标签但语义命中", semantic_topk[0][0])
+
+    # 提取 Top-N 编码
+    top_n_codes = [code for code, _score in semantic_topk[:topn]]
+
+    # 分支 3：folder_code 在 Top-N 内
+    if folder_code in top_n_codes:
+        # 检查是否有额外关联（其他编码 score > extra_threshold）
+        has_extra = any(
+            score > extra_threshold
+            for code, score in semantic_topk
+            if code != folder_code
+        )
+        if has_extra:
+            return ("➕", "一致且有额外关联", folder_code)
+        else:
+            return ("✅", "一致", folder_code)
+
+    # 分支 4：folder_code 不在 Top-N 内
+    return ("⚠️", "疑似错位", semantic_topk[0][0])
+
+
+# ==============================================================================
+# 阶段四 — 函数三：主整合函数
+# ==============================================================================
+
+def align_chunks(
+    chunk_records_with_emb: list,
+    indicator_collection,
+    top_k: int = EMBEDDING_TOP_K,
+    topn: int = CONSISTENCY_TOPN,
+    extra_threshold: float = EXTRA_RELEVANCE_THRESHOLD,
+    min_relevance: float = MIN_RELEVANCE_SCORE,
+) -> list:
+    """
+    主整合函数：调用 semantic_search_batch + classify_consistency。
+
+    参数：
+        chunk_records_with_emb - 含 embedding 的 chunk 列表
+        indicator_collection   - ChromaDB Collection 对象
+        top_k                  - 语义检索候选数
+        topn                   - 一致性判定 Top-N
+        extra_threshold        - 额外关联阈值
+        min_relevance          - 最低相关度阈值
+
+    返回：
+        List[dict]，每条追加 4 个字段：
+            "semantic_topk":    [(code, score), ...]
+            "consistency":      状态 emoji
+            "consistency_desc": 中文描述
+            "suggested_code":   建议编码
+
+    不修改原始 chunk_records_with_emb（浅拷贝每条记录）。
+    """
+    # 批量语义检索
+    all_topk = semantic_search_batch(
+        chunk_records_with_emb, indicator_collection, top_k=top_k
+    )
+
+    # 逐条判定一致性
+    alignment_records = []
+    for i, rec in enumerate(chunk_records_with_emb):
+        new_rec = dict(rec)  # 浅拷贝，不修改原始记录
+        topk = all_topk[i]
+        status, desc, suggested = classify_consistency(
+            folder_code=rec.get("folder_code"),
+            semantic_topk=topk,
+            topn=topn,
+            extra_threshold=extra_threshold,
+            min_relevance=min_relevance,
+        )
+        new_rec["semantic_topk"]    = topk
+        new_rec["consistency"]      = status
+        new_rec["consistency_desc"] = desc
+        new_rec["suggested_code"]   = suggested
+        alignment_records.append(new_rec)
+
+    # 打印统计摘要
+    print_phase4_summary(alignment_records)
+
+    return alignment_records
+
+
+# ==============================================================================
+# 阶段四 — 辅助函数：统计摘要打印
+# ==============================================================================
+
+def print_phase4_summary(alignment_records: list) -> None:
+    """
+    打印阶段四统计摘要表（各状态数量和占比），按固定顺序排列。
+    """
+    total = len(alignment_records)
+    if total == 0:
+        print("  统计摘要：无记录")
+        return
+
+    # 固定顺序的状态列表
+    status_order = [
+        ("✅", "一致"),
+        ("➕", "一致且有额外关联"),
+        ("⚠️", "疑似错位"),
+        ("🔍", "无路径标签但语义命中"),
+        ("➖", "低相关"),
+        ("❓", "无命中"),
+    ]
+
+    # 统计各状态数量
+    counts = {}
+    for rec in alignment_records:
+        emoji = rec.get("consistency", "❓")
+        counts[emoji] = counts.get(emoji, 0) + 1
+
+    # 打印表格
+    print("  统计摘要:")
+    print("  ┌──────────────────────────────┬──────┬───────┐")
+    print("  │ 状态                         │ 数量 │ 占比  │")
+    print("  ├──────────────────────────────┼──────┼───────┤")
+    for emoji, label in status_order:
+        count = counts.get(emoji, 0)
+        pct   = count / total * 100
+        status_str = f"{emoji} {label}"
+        print(f"  │ {status_str:<28} │ {count:>4} │ {pct:>5.1f}% │")
+    print("  └──────────────────────────────┴──────┴───────┘")
+
+
+# ==============================================================================
+# 阶段五 — 对齐表列定义与排序
+# ==============================================================================
+
+ALIGNMENT_COLUMNS = [
+    "chunk_id", "file_name", "file_path", "folder_code",
+    "folder_topic", "folder_indicator", "semantic_top5",
+    "consistency", "text_preview", "page_or_sheet",
+    "chunk_index", "human_code", "human_note",
+]
+
+CONSISTENCY_SORT_ORDER = {"⚠️": 0, "🔍": 1, "➕": 2, "✅": 3, "➖": 4, "❓": 5}
+
+
+# ==============================================================================
+# 阶段五 — 函数一：输出对齐表 Excel
+# ==============================================================================
+
+def write_alignment_excel(
+    alignment_records: list,
+    indicator_details: dict,
+    output_dir: str,
+    target_folder: str,
+    company_name: str,
+    file_records: list | None = None,
+) -> str:
+    """
+    将 alignment_records 转换为 13 列 DataFrame，排序、写入 Excel、格式化。
+    若 file_records 提供，额外写入「未覆盖文件」sheet。
+
+    参数：
+        alignment_records  - 阶段四产出的对齐记录列表
+        indicator_details  - 指标详情映射 {code: {"topic", "indicator", "requirement"}}
+        output_dir         - Excel 输出目录
+        target_folder      - 计算相对路径的基准目录
+        company_name       - 公司名称（未来可用于文件名）
+
+    返回：
+        生成的 Excel 文件绝对路径。
+    """
+    import pandas as pd
+    from datetime import datetime
+    from openpyxl import load_workbook
+    from openpyxl.styles import PatternFill, Font, Alignment
+    import re as _re
+
+    # openpyxl 禁止写入的非法字符（XML 1.0 不允许的控制字符）
+    _ILLEGAL_CHARS_RE = _re.compile(
+        r'[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f]'
+    )
+
+    def _sanitize(text: str) -> str:
+        """移除 openpyxl / Excel 不接受的非法字符。"""
+        if not isinstance(text, str):
+            return text
+        return _ILLEGAL_CHARS_RE.sub('', text)
+
+    # ── 步骤 1：构建行数据 ──
+    rows = []
+    for rec in alignment_records:
+        folder_code = rec.get("folder_code")
+        # 查表补 folder_topic / folder_indicator
+        if folder_code and folder_code in indicator_details:
+            detail = indicator_details[folder_code]
+            folder_topic = detail.get("topic", "") or ""
+            folder_indicator = detail.get("indicator", "") or ""
+        else:
+            folder_topic = ""
+            folder_indicator = ""
+
+        # 格式化 semantic_topk
+        topk = rec.get("semantic_topk", []) or []
+        semantic_top5 = ", ".join(
+            f"{code}:{score:.2f}" for code, score in topk
+        ) if topk else ""
+
+        # text_preview：子块文本前 200 字，替换换行符
+        text = rec.get("text", "") or ""
+        text_preview = text[:200].replace("\n", " ").replace("\r", " ")
+
+        # human_code 预填 suggested_code
+        human_code = rec.get("suggested_code") or ""
+
+        # file_path 转为相对路径
+        abs_path = rec.get("file_path", "")
+        try:
+            rel_path = os.path.relpath(abs_path, target_folder)
+        except ValueError:
+            rel_path = abs_path
+
+        rows.append({
+            "chunk_id":         _sanitize(rec.get("chunk_id", "") or ""),
+            "file_name":        _sanitize(rec.get("file_name", "") or ""),
+            "file_path":        _sanitize(rel_path),
+            "folder_code":      _sanitize(folder_code or ""),
+            "folder_topic":     _sanitize(folder_topic),
+            "folder_indicator": _sanitize(folder_indicator),
+            "semantic_top5":    _sanitize(semantic_top5),
+            "consistency":      rec.get("consistency", "") or "",
+            "text_preview":     _sanitize(text_preview),
+            "page_or_sheet":    _sanitize(rec.get("page_or_sheet", "") or ""),
+            "chunk_index":      rec.get("chunk_index", 0),
+            "human_code":       _sanitize(human_code),
+            "human_note":       "",
+        })
+
+    # ── 步骤 2：构建 DataFrame ──
+    df = pd.DataFrame(rows, columns=ALIGNMENT_COLUMNS)
+
+    # ── 步骤 3：排序 ──
+    df["_sort_key"] = df["consistency"].map(
+        lambda x: CONSISTENCY_SORT_ORDER.get(x, 999)
+    )
+    df = df.sort_values("_sort_key", kind="mergesort").drop(columns="_sort_key").reset_index(drop=True)
+
+    # ── 步骤 4：构造输出路径 ──
+    os.makedirs(output_dir, exist_ok=True)
+    filename = f"对齐表_{datetime.now().strftime('%Y%m%d')}.xlsx"
+    output_path = os.path.join(output_dir, filename)
+
+    # ── 步骤 5：pandas 写 Excel ──
+    df.to_excel(output_path, index=False, engine="openpyxl")
+
+    # ── 步骤 6：openpyxl 后处理 ──
+    wb = load_workbook(output_path)
+    ws = wb.active
+
+    # 6a. 冻结首行
+    ws.freeze_panes = "A2"
+
+    # 6b. 表头行加粗 + 浅灰背景
+    header_fill = PatternFill("solid", fgColor="D9D9D9")
+    header_font = Font(bold=True)
+    for cell in ws[1]:
+        cell.fill = header_fill
+        cell.font = header_font
+
+    # 6c. 条件格式：⚠️ 行浅红，🔍 行浅黄，➖ 行浅灰
+    red_fill = PatternFill("solid", fgColor="FFC7CE")
+    yellow_fill = PatternFill("solid", fgColor="FFEB9C")
+    gray_fill = PatternFill("solid", fgColor="D9D9D9")
+    gray_font = Font(color="808080")
+    # consistency 列是第 8 列（H 列，1-indexed col=8）
+    consistency_col_idx = ALIGNMENT_COLUMNS.index("consistency") + 1  # 1-indexed
+
+    for row_idx in range(2, ws.max_row + 1):
+        cell_value = str(ws.cell(row=row_idx, column=consistency_col_idx).value or "")
+        if "⚠️" in cell_value or cell_value == "⚠️":
+            fill, font = red_fill, None
+        elif "🔍" in cell_value or cell_value == "🔍":
+            fill, font = yellow_fill, None
+        elif "➖" in cell_value or cell_value == "➖":
+            fill, font = gray_fill, gray_font
+        else:
+            continue
+        for col_idx in range(1, ws.max_column + 1):
+            ws.cell(row=row_idx, column=col_idx).fill = fill
+            if font:
+                ws.cell(row=row_idx, column=col_idx).font = font
+
+    # 6d. 自动列宽（CJK 字符按 1.7 倍估算，上限 60 字符）
+    def _estimate_width(text: str) -> float:
+        """估算显示宽度：CJK 字符按 1.7 倍，其他按 1 倍。"""
+        import unicodedata
+        width = 0.0
+        for ch in str(text):
+            if unicodedata.east_asian_width(ch) in ('W', 'F'):
+                width += 1.7
+            else:
+                width += 1.0
+        return width
+
+    for col_cells in ws.columns:
+        max_width = 0.0
+        for cell in col_cells:
+            try:
+                cell_width = _estimate_width(str(cell.value or ""))
+                if cell_width > max_width:
+                    max_width = cell_width
+            except Exception:
+                pass
+        # +2 余量，上限 60
+        adjusted = min(max_width + 2, 60)
+        col_letter = col_cells[0].column_letter
+        ws.column_dimensions[col_letter].width = adjusted
+
+    # 6e. text_preview 列设置自动换行
+    text_preview_col_idx = ALIGNMENT_COLUMNS.index("text_preview") + 1
+    for row_idx in range(2, ws.max_row + 1):
+        ws.cell(row=row_idx, column=text_preview_col_idx).alignment = Alignment(wrap_text=True)
+
+    # ── 步骤 7：未覆盖文件 sheet ──
+    if file_records:
+        relevant_statuses = {"✅", "➕", "⚠️", "🔍"}
+        covered_files = set(
+            rec.get("file_path", "")
+            for rec in alignment_records
+            if rec.get("consistency", "") in relevant_statuses
+        )
+        all_file_map = {fr.get("file_path", ""): fr for fr in file_records}
+        uncovered_paths = set(all_file_map.keys()) - covered_files
+
+        if uncovered_paths:
+            ws2 = wb.create_sheet(title="未覆盖文件")
+            ws2_headers = ["文件名", "相对路径", "文件夹编码", "chunk数", "说明"]
+            for col_idx, h in enumerate(ws2_headers, 1):
+                cell = ws2.cell(row=1, column=col_idx, value=h)
+                cell.fill = header_fill
+                cell.font = header_font
+
+            # 统计每个文件的 chunk 数
+            file_chunk_counts = {}
+            for rec in alignment_records:
+                fp = rec.get("file_path", "")
+                file_chunk_counts[fp] = file_chunk_counts.get(fp, 0) + 1
+
+            uncovered_rows = []
+            for fp in sorted(uncovered_paths):
+                fr = all_file_map[fp]
+                try:
+                    rel = os.path.relpath(fp, target_folder)
+                except ValueError:
+                    rel = fp
+                uncovered_rows.append({
+                    "文件名": fr.get("file_name", ""),
+                    "相对路径": rel,
+                    "文件夹编码": fr.get("folder_code", "") or "",
+                    "chunk数": file_chunk_counts.get(fp, 0),
+                    "说明": "所有chunk均低相关（top1 < {:.2f}）".format(MIN_RELEVANCE_SCORE)
+                           if file_chunk_counts.get(fp, 0) > 0
+                           else "提取失败或无有效内容",
+                })
+
+            for row_idx, row in enumerate(uncovered_rows, 2):
+                for col_idx, h in enumerate(ws2_headers, 1):
+                    ws2.cell(row=row_idx, column=col_idx, value=row[h])
+
+            # 自动列宽
+            for col_idx, h in enumerate(ws2_headers, 1):
+                max_len = len(h) * 2  # 中文标题
+                for row_idx in range(2, len(uncovered_rows) + 2):
+                    val = str(ws2.cell(row=row_idx, column=col_idx).value or "")
+                    max_len = max(max_len, len(val))
+                ws2.column_dimensions[chr(64 + col_idx)].width = min(max_len + 2, 60)
+
+            ws2.freeze_panes = "A2"
+
+    # ── 步骤 8：保存并返回 ──
+    wb.save(output_path)
+    return output_path
+
+
+# ==============================================================================
+# 阶段五 — 函数二：打印摘要
+# ==============================================================================
+
+def print_phase5_summary(
+    output_path: str,
+    alignment_records: list,
+    file_records: list,
+) -> None:
+    """打印阶段五统计摘要，含文件覆盖率分析。"""
+    review_statuses = {"⚠️", "🔍", "➕"}
+    count = sum(
+        1 for rec in alignment_records
+        if rec.get("consistency", "") in review_statuses
+    )
+    print(f"  ✓ 已生成: {output_path}")
+    print(f"  ✓ 需人工审查: {count} 行（⚠️ + 🔍 + ➕）")
+
+    # 文件覆盖率分析：有效 chunk（非 ➖ 非 ❓）覆盖了多少文件
+    relevant_statuses = {"✅", "➕", "⚠️", "🔍"}
+    covered_files = set(
+        rec.get("file_path", "")
+        for rec in alignment_records
+        if rec.get("consistency", "") in relevant_statuses
+    )
+    all_files = set(fr.get("file_path", "") for fr in file_records)
+    uncovered = all_files - covered_files
+    covered_count = len(all_files) - len(uncovered)
+
+    print(f"  ✓ 文件覆盖率: {covered_count}/{len(all_files)}"
+          f"（{covered_count / len(all_files) * 100:.1f}%）")
+    if uncovered:
+        print(f"  ⚠ 未覆盖文件（所有 chunk 均低相关）: {len(uncovered)} 个")
+        # 按相对路径排序，取前 10 个展示
+        uncovered_rel = sorted(
+            os.path.relpath(fp, os.path.dirname(output_path).replace("/processed", "/processed/模拟甲方整理后资料"))
+            if fp else fp
+            for fp in uncovered
+        )
+        for fp in uncovered_rel[:10]:
+            print(f"    - {fp}")
+        if len(uncovered_rel) > 10:
+            print(f"    ... 及其余 {len(uncovered_rel) - 10} 个（详见对齐表「未覆盖文件」sheet）")
+
+    print()
+    print("═" * 39)
+
+
+# ==============================================================================
+# 主函数
+# ==============================================================================
+
+# 各文件类型对应的提取器（按扩展名路由）
+_EXTRACTOR_MAP = {
+    ".pdf":  extract_pdf,
+    ".docx": extract_docx,
+    ".doc":  extract_doc,
+    ".xlsx": extract_xlsx,
+    ".xls":  extract_xls,
+    ".pptx": extract_pptx,
+    ".ppt":  extract_ppt,
+    ".jpg":  extract_image,
+    ".jpeg": extract_image,
+    ".png":  extract_image,
+}
+
+
+def main():
+    print_header()
+    print_config_summary()
+
+    # 将主配置注入 extractors 模块（OCR + VLM 服务地址）
+    configure_glmocr(GLM_OCR_BASE_URL, GLM_OCR_MODEL)
+    configure_vlm(VLM_BASE_URL, VLM_MODEL)
+    load_vlm_cache()
+
+    # ── 阶段一：加载清单映射 + 扫描文件 ──────────────────────────────────
+    print("[阶段一] 加载清单映射...")
+
+    esg_mapping, _stats   = load_esg_mapping_from_reference_excel(REFERENCE_EXCEL)
+    indicator_details     = load_indicator_details(REFERENCE_EXCEL)
+    file_records          = scan_target_files(TARGET_FOLDER, esg_mapping)
+
+    print_phase1_summary(esg_mapping, indicator_details, file_records)
+
+    # 加载增强查询文本，注入给 VLM 作为图片分类上下文
+    import json as _json
+    _enhanced_for_vlm = {}
+    if os.path.isfile(ENHANCED_QUERY_PATH):
+        try:
+            with open(ENHANCED_QUERY_PATH, "r", encoding="utf-8") as _f:
+                _enhanced_for_vlm = _json.load(_f)
+            print(f"  ✓ 已加载增强查询文本用于 VLM 上下文：{len(_enhanced_for_vlm)} 条")
+        except Exception:
+            pass
+    configure_vlm_context(_enhanced_for_vlm)
+
+    # ── 阶段 2a：文本提取 → sections（extractors.py）───────────────────
+    print()
+    print("[阶段 2a] 文本提取...")
+
+    all_sections = None
+    if not FORCE_REEXTRACT:
+        all_sections = load_sections_cache(SECTION_CACHE_PATH)
+        if all_sections is not None:
+            total_secs = sum(len(v) for v in all_sections.values())
+            print(f"  ✓ 从缓存加载 {len(all_sections)} 个文件的 {total_secs} 个 sections"
+                  f"（跳过重新提取）")
+            print(f"    缓存路径：{SECTION_CACHE_PATH}")
+
+    if all_sections is None:
+        if FORCE_REEXTRACT:
+            print(f"  [强制重提取] FORCE_REEXTRACT=True，忽略缓存")
+            # 清除 VLM 缓存（确保图片也重新处理）
+            if os.path.isfile(VLM_CACHE_PATH):
+                os.remove(VLM_CACHE_PATH)
+                print(f"  [强制重提取] 已删除 VLM 缓存：{VLM_CACHE_PATH}")
+        all_sections = {}
+        skipped = 0
+        pbar = tqdm(file_records, desc="  提取文件", unit="个",
+                    ncols=80, dynamic_ncols=False)
+        for fr in pbar:
+            fname = fr["file_name"]
+            pbar.set_postfix_str(fname[:30], refresh=False)
+            sections = extract_sections(fr)
+            if sections is None:  # 不支持的格式
+                skipped += 1
+                continue
+            rel_path = fr.get("relative_path", fr["file_name"])
+            all_sections[rel_path] = sections
+        pbar.close()
+
+        total_secs = sum(len(v) for v in all_sections.values())
+        print(f"  ✓ 共提取 {total_secs} 个 sections（{len(all_sections)} 个文件）"
+              + (f"（跳过 {skipped} 个不支持格式）" if skipped else ""))
+        save_sections_cache(all_sections, SECTION_CACHE_PATH)
+        save_vlm_cache()  # 持久化 VLM 分类结果
+
+    # ── 阶段 2b：分块 → chunks ──────────────────────────────────────────
+    print()
+    print("[阶段 2b] 文本分块...")
+
+    # 扩展名 → chunk_params 文件类型
+    _EXT_TYPE_MAP = {
+        ".pdf": "pdf", ".docx": "docx", ".doc": "docx",
+        ".xlsx": "xlsx", ".xls": "xlsx",
+        ".pptx": "pptx", ".ppt": "pptx",
+        ".jpg": "image", ".jpeg": "image", ".png": "image",
+    }
+
+    chunk_records = None
+    if not FORCE_REEXTRACT and not FORCE_RECHUNK:
+        chunk_records = load_chunks_cache(CHUNK_CACHE_PATH)
+        if chunk_records is not None:
+            print(f"  ✓ 从缓存加载 {len(chunk_records)} 个文本块（跳过重新分块）")
+            print(f"    缓存路径：{CHUNK_CACHE_PATH}")
+            print(f"    如需强制重新分块，请在 src/config.py 中设置 FORCE_RECHUNK = True")
+
+    if chunk_records is None:
+        if FORCE_RECHUNK:
+            print(f"  [强制重分块] FORCE_RECHUNK=True，忽略 chunks 缓存")
+        chunk_records = []
+        fr_by_relpath = {fr.get("relative_path", fr["file_name"]): fr
+                         for fr in file_records}
+        for rel_path, sections in all_sections.items():
+            fr = fr_by_relpath.get(rel_path)
+            if fr is None:
+                continue
+            file_type = _EXT_TYPE_MAP.get(fr["extension"], "pdf")
+            _max, _min = chunk_params(file_type)
+            chunks = make_chunks_from_sections(sections, fr,
+                                               max_size=_max, min_size=_min)
+            chunk_records.extend(chunks)
+
+        print(f"  ✓ 共生成 {len(chunk_records)} 个文本块")
+        save_chunks_cache(chunk_records, CHUNK_CACHE_PATH)
+
+    # ── 阶段三：构建向量库 ────────────────────────────────────────────────
+    print()
+    print("[阶段三] 构建向量库...")
+
+    # 3a：构建指标查询文本
+    indicator_queries = build_indicator_queries(indicator_details)
+    print(f"  ✓ 构建 {len(indicator_queries)} 条指标查询文本")
+
+    # 3b + 3c：计算指标 embedding，存入 ChromaDB（含复用检测）
+    indicator_collection = build_indicator_collection(
+        indicator_queries,
+        indicator_details,
+        OPENAI_API_KEY,
+        OPENAI_BASE_URL,
+        EMBEDDING_MODEL,
+        CHROMA_PERSIST_DIR,
+        COMPANY_NAME,
+    )
+
+    # 3d：计算 chunk embedding（含 .npz 缓存复用）
+    print(f"  文本块 embedding...（共 {len(chunk_records)} 个）")
+
+    emb_list = None
+    if not FORCE_REEXTRACT and not FORCE_RECHUNK:
+        emb_list = load_emb_cache(EMB_CACHE_PATH, len(chunk_records))
+
+    if emb_list is not None:
+        chunk_records_with_emb = [
+            {**rec, "embedding": emb}
+            for rec, emb in zip(chunk_records, emb_list)
+        ]
+        valid_emb_count = sum(1 for e in emb_list if e is not None)
+        print(f"  ✓ 从缓存加载 {len(emb_list)} 个 embedding"
+              f"（{valid_emb_count} 有效，跳过重新计算）")
+        print(f"    缓存路径：{EMB_CACHE_PATH}")
+    else:
+        if FORCE_REEXTRACT or FORCE_RECHUNK:
+            print(f"  [强制重算] 忽略 embedding 缓存"
+                  f"（FORCE_REEXTRACT={FORCE_REEXTRACT}, FORCE_RECHUNK={FORCE_RECHUNK}）")
+        chunk_records_with_emb = embed_chunks(
+            chunk_records,
+            OPENAI_API_KEY,
+            OPENAI_BASE_URL,
+            EMBEDDING_MODEL,
+        )
+        valid_emb_count = sum(
+            1 for c in chunk_records_with_emb if c.get("embedding") is not None
+        )
+        print(f"  ✓ 全部 embedding 完成（{valid_emb_count} 个有效，"
+              f"{len(chunk_records_with_emb) - valid_emb_count} 个空文本跳过）")
+        save_emb_cache(chunk_records_with_emb, EMB_CACHE_PATH)
+
+    # ── 阶段四：语义检索 + 一致性判断 ──────────────────────────────────
+    print()
+    print("[阶段四] 语义检索与一致性判断...")
+
+    alignment_records = align_chunks(
+        chunk_records_with_emb,
+        indicator_collection,
+        top_k=EMBEDDING_TOP_K,
+        topn=CONSISTENCY_TOPN,
+        extra_threshold=EXTRA_RELEVANCE_THRESHOLD,
+        min_relevance=MIN_RELEVANCE_SCORE,
+    )
+
+    print(f"  ✓ 完成 {len(alignment_records)} 个文本块的对齐判断")
+
+    # ── 阶段五：输出对齐表 ────────────────────────────────────────────────
+    print()
+    print("[阶段五] 输出对齐表...")
+
+    output_path = write_alignment_excel(
+        alignment_records,
+        indicator_details,
+        OUTPUT_DIR,
+        TARGET_FOLDER,
+        COMPANY_NAME,
+        file_records=file_records,
+    )
+
+    print_phase5_summary(output_path, alignment_records, file_records)
+
+
+if __name__ == "__main__":
+    main()
