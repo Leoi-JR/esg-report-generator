@@ -275,8 +275,9 @@ async def call_llm_async(
         last_error = None
         for attempt in range(DRAFT_MAX_RETRIES):
             try:
+                # DRAFT_LLM_BASE_URL 已包含 /v1，直接拼接 /chat/completions
                 resp = await client.post(
-                    f"{DRAFT_LLM_BASE_URL}/v1/chat/completions",
+                    f"{DRAFT_LLM_BASE_URL}/chat/completions",
                     json=payload,
                     headers={"Authorization": f"Bearer {DRAFT_LLM_API_KEY}"},
                     timeout=DRAFT_LLM_TIMEOUT
@@ -642,14 +643,24 @@ async def main_async(args):
 
         # 质量过滤
         if max_score < args.score_threshold:
+            # 即使跳过，也生成 sources_mapping 用于 Web 端展示检索到的资料
+            top_chunks = node.get("top_chunks", [])
+            _, sources_mapping = prepare_context(top_chunks, args.text_limit)
+
             skipped_nodes.append({
                 "id": node_id,
                 "full_path": node.get("full_path", ""),
                 "leaf_title": node.get("leaf_title", ""),
                 "status": "skipped",
                 "skip_reason": f"max_score ({max_score:.3f}) < {args.score_threshold}",
+                "draft": {
+                    "content": "",
+                    "word_count": 0,
+                    "cited_sources": [],
+                    "sources_mapping": sources_mapping,
+                },
                 "context_summary": {
-                    "chunks_provided": len(node.get("top_chunks", [])),
+                    "chunks_provided": len(top_chunks),
                     "max_score": max_score,
                     "avg_score": stats.get("avg_score", 0)
                 }

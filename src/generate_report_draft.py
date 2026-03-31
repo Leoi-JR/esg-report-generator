@@ -62,7 +62,14 @@ from config import (
     OPENAI_BASE_URL,
     RERANKER_BASE_URL,
     RERANKER_INSTRUCT,
+    # Phase 3: BM25 混合检索
+    ENABLE_BM25,
+    BM25_TOP_N,
+    RRF_K,
+    # Reranker 默认开关
+    ENABLE_RERANK,
 )
+from bm25_retriever import build_bm25_index, bm25_search_batch
 
 # ── 路径常量 ───────────────────────────────────────────────────────────────────
 _HERE = os.path.dirname(os.path.abspath(__file__))
@@ -183,7 +190,7 @@ def _parse_top1_score(semantic_top5: str) -> float:
         return 0.0
 
 
-def load_candidate_pool() -> tuple[list[dict], np.ndarray]:
+def load_candidate_pool() -> tuple[list[dict], np.ndarray, dict]:
     """
     加载文本块及其 embedding，过滤低质量块，返回候选池。
 
@@ -193,15 +200,27 @@ def load_candidate_pool() -> tuple[list[dict], np.ndarray]:
       - 排除「类型：照片」的图片描述（对撰稿帮助不大）
 
     返回：
-      (candidate_chunks, candidate_embs)
+      (candidate_chunks, candidate_embs, parents)
       - candidate_chunks: 候选 chunk 记录列表
       - candidate_embs:   对应 embedding 矩阵 (N_candidates, 4096)
+      - parents:          {parent_id: parent_text} 字典（Phase 1 新结构）
     """
-    # ── 加载 chunks_cache.json ──
+    # ── 加载 chunks_cache.json（Phase 1 新结构：{parents, chunks}）──
     print(f"\n[步骤2] 加载候选池...")
     with open(CHUNK_CACHE_PATH, "r", encoding="utf-8") as f:
-        all_chunks = json.load(f)
+        cache_data = json.load(f)
+
+    # 兼容旧格式（列表）和新格式（字典）
+    if isinstance(cache_data, list):
+        all_chunks = cache_data
+        parents = {}
+    else:
+        all_chunks = cache_data.get("chunks", [])
+        parents = cache_data.get("parents", {})
+
     print(f"  文本块总数：{len(all_chunks)}")
+    if parents:
+        print(f"  parents 条数：{len(parents)}")
 
     # ── 加载 embedding 缓存 ──
     data = np.load(EMB_CACHE_PATH)
@@ -268,7 +287,7 @@ def load_candidate_pool() -> tuple[list[dict], np.ndarray]:
     if n_not_in_table:
         print(f"    排除（不在对齐表中）：{n_not_in_table}")
 
-    return candidate_chunks, candidate_embs
+    return candidate_chunks, candidate_embs, parents
 
 
 def compute_similarity(
@@ -333,6 +352,243 @@ def _determine_source(score_rq: float, score_hyde: float) -> str:
     if diff < SOURCE_DIFF_THRESHOLD:
         return "both"
     return "retrieval_query" if score_rq > score_hyde else "hypothetical_doc"
+
+
+# ==============================================================================
+# 步骤 2.5 & 3：BM25 检索 + RRF 三路融合（Phase 3 新增）
+# ==============================================================================
+
+def rrf_fusion(
+    ranks_rq: dict[str, int],
+    ranks_hyde: dict[str, int],
+    ranks_bm25: dict[str, int],
+    k: int = RRF_K,
+) -> dict[str, float]:
+    """
+    RRF (Reciprocal Rank Fusion) 三路融合。
+
+    公式：score(d) = Σ 1/(k + rank_i(d))
+
+    参数：
+        ranks_rq: {chunk_id: rank} retrieval_query 路径排名
+        ranks_hyde: {chunk_id: rank} hypothetical_doc 路径排名
+        ranks_bm25: {chunk_id: rank} BM25 路径排名
+        k: RRF 平滑参数（默认 60，值越大排名差异影响越小）
+
+    返回：
+        {chunk_id: rrf_score} 融合后的分数
+    """
+    all_chunks = set(ranks_rq) | set(ranks_hyde) | set(ranks_bm25)
+    scores = {}
+
+    for cid in all_chunks:
+        score = 0.0
+        if cid in ranks_rq:
+            score += 1.0 / (k + ranks_rq[cid])
+        if cid in ranks_hyde:
+            score += 1.0 / (k + ranks_hyde[cid])
+        if cid in ranks_bm25:
+            score += 1.0 / (k + ranks_bm25[cid])
+        scores[cid] = score
+
+    return scores
+
+
+def _determine_source_rrf(rank_rq: int, rank_hyde: int, rank_bm25: int) -> str:
+    """
+    判断 chunk 主要由哪条路径贡献（三路版本）。
+
+    规则：
+    - 取排名最靠前的路径
+    - 如果前两名排名差距 ≤ 5，标记为 "multi"
+    """
+    ranks = {"retrieval_query": rank_rq, "hypothetical_doc": rank_hyde, "bm25": rank_bm25}
+    sorted_items = sorted(ranks.items(), key=lambda x: x[1])
+
+    # 如果前两名差距很小，标记为 multi
+    if sorted_items[1][1] - sorted_items[0][1] <= 5:
+        return "multi"
+
+    return sorted_items[0][0]
+
+
+def select_topk_rrf(
+    scores_rq: np.ndarray,
+    scores_hyde: np.ndarray,
+    bm25_results: Optional[list[list[tuple[str, float]]]],
+    candidate_chunks: list[dict],
+    queries: list[dict],
+    k: int = DRAFT_BIENCODER_TOP_N,
+) -> list[dict]:
+    """
+    三路 RRF 融合选取 Top-K（Phase 3 新增）。
+
+    当 bm25_results 为 None 时，退化为原双路 Max 融合逻辑。
+
+    参数：
+        scores_rq: (n_queries, n_candidates) retrieval_query 相似度矩阵
+        scores_hyde: (n_queries, n_candidates) hypothetical_doc 相似度矩阵
+        bm25_results: 每个查询的 BM25 结果 [[(chunk_id, score), ...], ...]，None 时禁用
+        candidate_chunks: 候选 chunk 列表
+        queries: 查询记录列表
+        k: 每个查询保留的 top-K 数量
+
+    返回：
+        结果列表，格式同 select_topk()，新增 score_bm25 字段
+    """
+    use_bm25 = bm25_results is not None
+    mode_str = "三路 RRF" if use_bm25 else "双路 Max"
+    print(f"\n[步骤3] {mode_str} 融合 + Top-{k} 选取（含 parent_id 去重）...")
+
+    n_queries = scores_rq.shape[0]
+
+    # 构建 chunk_id → index 映射
+    id_to_idx = {c["chunk_id"]: i for i, c in enumerate(candidate_chunks)}
+
+    results = []
+    dedup_stats = {"total_deduped": 0}
+    global_source_dist = {}  # 动态初始化
+
+    for qi in range(n_queries):
+        q = queries[qi]
+        rq_scores_row = scores_rq[qi]
+        hyde_scores_row = scores_hyde[qi]
+
+        # 1. 从 Embedding 分数构建排名（降序，排名从 1 开始）
+        rq_sorted_idx = np.argsort(-rq_scores_row)
+        hyde_sorted_idx = np.argsort(-hyde_scores_row)
+
+        rq_ranks = {candidate_chunks[idx]["chunk_id"]: rank + 1
+                    for rank, idx in enumerate(rq_sorted_idx)}
+        hyde_ranks = {candidate_chunks[idx]["chunk_id"]: rank + 1
+                      for rank, idx in enumerate(hyde_sorted_idx)}
+
+        # 2. BM25 排名（如果启用）
+        bm25_ranks = {}
+        bm25_score_map = {}  # 保存原始 BM25 分数用于输出
+        if use_bm25:
+            for rank, (cid, bm25_score) in enumerate(bm25_results[qi], 1):
+                if cid in id_to_idx:  # 仅限候选池内的 chunk
+                    bm25_ranks[cid] = rank
+                    bm25_score_map[cid] = bm25_score
+
+        # 3. 计算融合分数
+        if use_bm25 and bm25_ranks:
+            fused_scores = rrf_fusion(rq_ranks, hyde_ranks, bm25_ranks)
+        else:
+            # 退化为双路 Max 融合（使用原始相似度分数）
+            fused_scores = {}
+            for idx, chunk in enumerate(candidate_chunks):
+                cid = chunk["chunk_id"]
+                fused_scores[cid] = max(float(rq_scores_row[idx]),
+                                        float(hyde_scores_row[idx]))
+
+        # 4. 按融合分数排序 + parent_id 去重
+        sorted_cids = sorted(fused_scores.keys(), key=lambda c: -fused_scores[c])
+
+        seen_parents = set()
+        top_chunks = []
+        source_dist = {}
+
+        for cid in sorted_cids:
+            if len(top_chunks) >= k:
+                break
+
+            idx = id_to_idx.get(cid)
+            if idx is None:
+                continue
+
+            chunk = candidate_chunks[idx]
+            parent_id = chunk.get("parent_id", "")
+
+            if parent_id in seen_parents:
+                dedup_stats["total_deduped"] += 1
+                continue
+
+            seen_parents.add(parent_id)
+
+            # 获取各路分数和排名
+            score_rq_val = float(rq_scores_row[idx])
+            score_hyde_val = float(hyde_scores_row[idx])
+            score_bm25_val = bm25_score_map.get(cid, 0.0) if use_bm25 else 0.0
+
+            rank_rq = rq_ranks.get(cid, 9999)
+            rank_hyde = hyde_ranks.get(cid, 9999)
+            rank_bm25 = bm25_ranks.get(cid, 9999) if use_bm25 else 9999
+
+            # 判断来源
+            if use_bm25:
+                source = _determine_source_rrf(rank_rq, rank_hyde, rank_bm25)
+            else:
+                source = _determine_source(score_rq_val, score_hyde_val)
+
+            source_dist[source] = source_dist.get(source, 0) + 1
+            global_source_dist[source] = global_source_dist.get(source, 0) + 1
+
+            chunk_record = {
+                "rank": len(top_chunks) + 1,
+                "score": round(fused_scores[cid], 6),
+                "score_rq": round(score_rq_val, 4),
+                "score_hyde": round(score_hyde_val, 4),
+                "source": source,
+                "chunk_id": cid,
+                "parent_id": parent_id,
+                "file_name": chunk.get("file_name", ""),
+                "folder_code": chunk.get("folder_code", ""),
+                "page_or_sheet": chunk.get("page_or_sheet", ""),
+                "text": chunk.get("text", ""),
+                "parent_text": chunk.get("parent_text", ""),
+            }
+
+            # BM25 模式新增字段
+            if use_bm25:
+                chunk_record["score_bm25"] = round(score_bm25_val, 4)
+
+            top_chunks.append(chunk_record)
+
+        # 统计
+        chunk_scores = [c["score"] for c in top_chunks]
+        source_files = sorted(set(c["file_name"] for c in top_chunks))
+
+        results.append({
+            "id": q["id"],
+            "full_path": q["full_path"],
+            "leaf_title": q["leaf_title"],
+            "gloss": q.get("gloss", ""),
+            "retrieval_query": q["retrieval_query"],
+            "hypothetical_doc": q.get("hypothetical_doc", ""),
+            "top_chunks": top_chunks,
+            "stats": {
+                "avg_score": round(sum(chunk_scores) / len(chunk_scores), 4)
+                             if chunk_scores else 0,
+                "max_score": round(max(chunk_scores), 4) if chunk_scores else 0,
+                "chunk_count": len(top_chunks),
+                "source_files": source_files,
+                "source_distribution": source_dist,
+                "fusion_mode": "rrf" if use_bm25 else "max",
+            },
+        })
+
+    # 打印汇总统计
+    avg_scores = [r["stats"]["avg_score"] for r in results]
+    chunk_counts = [r["stats"]["chunk_count"] for r in results]
+    total_chunks = sum(chunk_counts)
+
+    print(f"  ✓ 完成 {len(results)} 个叶节点检索")
+    print(f"    融合模式：{mode_str}")
+    print(f"    去重移除：{dedup_stats['total_deduped']} 个同源 chunk")
+    print(f"    平均 score：{np.mean(avg_scores):.4f} "
+          f"(min={np.min(avg_scores):.4f}, max={np.max(avg_scores):.4f})")
+    print(f"    平均 chunk 数：{np.mean(chunk_counts):.1f} "
+          f"(满额 {k} 的有 {sum(1 for c in chunk_counts if c >= k)} 个)")
+
+    # 来源分布
+    print(f"    来源分布（总 {total_chunks} chunks）：")
+    for src, cnt in sorted(global_source_dist.items(), key=lambda x: -x[1]):
+        pct = 100 * cnt / total_chunks if total_chunks else 0
+        print(f"      {src}: {cnt} ({pct:.1f}%)")
+
+    return results
 
 
 def select_topk(
@@ -1026,11 +1282,19 @@ def print_header():
 
 def main():
     parser = argparse.ArgumentParser(
-        description="ESG 报告初稿生成 — 双路语义检索 + Reranking"
+        description="ESG 报告初稿生成 — 双路/三路语义检索 + Reranking"
     )
     parser.add_argument(
-        "--rerank", action="store_true",
+        "--rerank", action="store_true", default=None,
         help="启用 Reranker 精排（步骤 4），需 reranker_server.py 运行在 8083 端口"
+    )
+    parser.add_argument(
+        "--no-rerank", action="store_true",
+        help="禁用 Reranker 精排（仅执行步骤 1-3）"
+    )
+    parser.add_argument(
+        "--no-bm25", action="store_true",
+        help="禁用 BM25 第三路检索（退回纯 Embedding 双路模式）"
     )
     parser.add_argument(
         "--biencoder-n", type=int, default=DRAFT_BIENCODER_TOP_N,
@@ -1045,15 +1309,32 @@ def main():
     print_header()
     t0 = time.time()
 
+    # 确定是否启用 BM25
+    use_bm25 = ENABLE_BM25 and not args.no_bm25
+
+    # 确定是否启用 Reranker（优先级：--no-rerank > --rerank > config.ENABLE_RERANK）
+    if args.no_rerank:
+        use_rerank = False
+    elif args.rerank:
+        use_rerank = True
+    else:
+        use_rerank = ENABLE_RERANK  # 使用配置文件默认值
+
     # 确定粗排/精排数量
-    if args.rerank:
+    if use_rerank:
         biencoder_n = args.biencoder_n   # 粗排拉取更多候选送 reranker
         final_k     = args.top_k         # 精排后最终数量
-        print(f"  模式：双路 bi-encoder 粗排 top-{biencoder_n} → reranker 精排 top-{final_k}")
+        mode_desc = f"{'三路 RRF' if use_bm25 else '双路 Max'} 粗排 top-{biencoder_n} → reranker 精排 top-{final_k}"
     else:
         biencoder_n = args.top_k         # 无 reranker：粗排直接给最终数量
         final_k     = args.top_k
-        print(f"  模式：双路 bi-encoder，top-{final_k}（跳过 reranker）")
+        mode_desc = f"{'三路 RRF' if use_bm25 else '双路 Max'}，top-{final_k}（跳过 reranker）"
+
+    print(f"  模式：{mode_desc}")
+    if use_bm25:
+        print(f"  BM25：启用（RRF_K={RRF_K}，BM25_TOP_N={BM25_TOP_N}）")
+    else:
+        print(f"  BM25：禁用")
     print()
 
     # ── 步骤 1：加载框架查询 + 双路 Embedding ──
@@ -1061,19 +1342,28 @@ def main():
     rq_embs, hyde_embs = embed_queries_dual(queries)
 
     # ── 步骤 2：加载候选池 + 双路相似度计算 ──
-    candidate_chunks, candidate_embs = load_candidate_pool()
+    candidate_chunks, candidate_embs, parents = load_candidate_pool()
     scores_rq, scores_hyde, scores_fused = compute_dual_similarity(
         rq_embs, hyde_embs, candidate_embs
     )
 
-    # ── 步骤 3：bi-encoder Top-N 粗排（基于融合分数）──
-    results = select_topk(
-        scores_rq, scores_hyde, scores_fused,
+    # ── 步骤 2.5（Phase 3 新增）：BM25 检索 ──
+    bm25_results = None
+    if use_bm25:
+        print(f"\n[步骤2.5] BM25 稀疏检索...")
+        build_bm25_index(candidate_chunks)
+        bm25_queries = [q["retrieval_query"] for q in queries]
+        bm25_results = bm25_search_batch(bm25_queries, top_n=BM25_TOP_N)
+        print(f"  ✓ 完成 {len(queries)} 个查询的 BM25 检索（每查询 top-{BM25_TOP_N}）")
+
+    # ── 步骤 3：三路/双路融合 + Top-N 粗排 ──
+    results = select_topk_rrf(
+        scores_rq, scores_hyde, bm25_results,
         candidate_chunks, queries, k=biencoder_n
     )
 
     # ── 步骤 4：Reranker 精排（可选）──
-    if args.rerank:
+    if use_rerank:
         results = rerank_results(results, final_k=final_k)
 
     # ── 保存输出 ──
