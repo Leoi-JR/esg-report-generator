@@ -1,3 +1,4 @@
+
 """
 extractors.py
 =============
@@ -41,12 +42,16 @@ from config import (
     PDF_PPT_ASPECT_RATIO,
     PDF_PPT_AVG_BLOCK_CHARS,
     PDF_PPT_AVG_IMAGES,
-    PDF_SCANNED_CHARS_PER_PAGE,
-    PDF_OCR_DPI,
     PDF_TITLE_SIZE_PERCENTILE,
     PDF_TITLE_MAX_CHARS,
     PDF_TITLE_RATIO_MAX,
     PDF_TITLE_MIN_COUNT,
+    # SDK PDF 提取参数（v2）
+    PDF_PAGE_MIN_CHARS,
+    TITLE_REBUILD_MODE,
+    SDK_CONFIG_PATH,
+    SDK_REUSE_INSTANCE,
+    SDK_LAYOUT_DEVICE,
     # DOCX 标题识别
     DOCX_HEADING_MAX_CHARS,
     # LibreOffice 超时
@@ -65,6 +70,17 @@ from config import (
     VLM_MAX_IMAGE_PX,
     # VLM 缓存
     VLM_CACHE_PATH,
+    # SDK 图片缓存
+    SDK_IMAGE_CACHE_DIR,
+    # LLM API（标题层级 LLM 重建用）
+    DRAFT_LLM_BASE_URL,
+    DRAFT_LLM_API_KEY,
+    DRAFT_LLM_MODEL,
+    # SDK DPI（坐标转换用）
+    SDK_PDF_DPI,
+    # 表格处理优化参数（Phase 1）
+    TABLE_MAX_ROWS,
+    SHORT_TEXT_THRESHOLD,
 )
 
 
@@ -82,6 +98,101 @@ SPLIT_SEPARATORS = ['\n\n', '\n', '。', '，', '']
 
 # 分块参数统一在 src/config.py 中管理（CHUNK_MAX_SIZE / CHUNK_MIN_SIZE 及各类型覆盖值）
 # 各 parse_* 函数通过 chunk_params('<type>') 获取对应的 (max_size, min_size)
+
+
+# ==============================================================================
+# 2-0b  HTML 表格 → Markdown 转换
+# ==============================================================================
+
+def html_table_to_markdown(html_text: str) -> tuple:
+    """
+    将文本中的 HTML 表格转换为 Markdown 格式，同时保留原始 HTML。
+
+    - 保留非表格部分的文本
+    - 多个表格依次转换
+    - 正确识别表头（第一行作为列名）
+    - 使用 pandas.read_html() + DataFrame.to_markdown() 组合
+
+    技术背景：
+        SDK 路径（PP-DocLayout-V3）识别表格后用 "Table Recognition:" prompt
+        输出 HTML <table> 格式。HTML 标签占比约 55-60%，信噪比低（~0.8）。
+        转换为 Markdown 后标签占比降至 15-20%，信噪比提升至 ~4.0。
+
+    表头处理：
+        GLM-OCR 输出的表格使用 <td> 而非 <th>，pandas 默认把第一行当数据。
+        本函数会将第一行数据提升为列名（header=0），正确还原表格结构。
+
+    返回：
+        (converted_text, table_html_list)
+        - converted_text: 转换后的文本（HTML 表格已替换为 Markdown）
+        - table_html_list: 原始 HTML 表格列表（用于 Web 渲染）
+
+    依赖：
+        pip install tabulate  # pandas.to_markdown() 依赖
+    """
+    if '<table' not in html_text.lower():
+        return html_text, []
+
+    try:
+        import pandas as pd
+        from io import StringIO
+    except ImportError:
+        # pandas 不可用时返回原文
+        return html_text, []
+
+    result = html_text
+    table_html_list = []
+
+    # 处理完整的表格（<table>...</table>）
+    complete_pattern = re.compile(r'<table[^>]*>.*?</table>', re.DOTALL | re.IGNORECASE)
+
+    for match in complete_pattern.finditer(html_text):
+        table_html = match.group()
+        table_html_list.append(table_html)  # 保留原始 HTML
+        md = _convert_single_table(table_html, pd, StringIO)
+        if md:
+            result = result.replace(table_html, '\n' + md + '\n')
+
+    return result, table_html_list
+
+
+def _convert_single_table(table_html: str, pd, StringIO) -> str:
+    """
+    将单个 HTML 表格转换为 Markdown。
+
+    参数:
+        table_html: 完整的 <table>...</table> HTML 字符串
+        pd: pandas 模块引用
+        StringIO: io.StringIO 类引用
+
+    返回:
+        Markdown 格式的表格字符串，失败时返回 None
+    """
+    try:
+        # pandas.read_html() 需要 StringIO 包装
+        # header=0 表示第一行作为列名（表头）
+        dfs = pd.read_html(StringIO(table_html), header=0)
+        if not dfs:
+            return None
+
+        df = dfs[0].fillna('')
+
+        # 将所有列转为字符串，避免数字格式问题
+        df = df.astype(str)
+        # 将 'nan' 替换为空字符串
+        df = df.replace('nan', '')
+
+        # 尝试转换为 Markdown
+        try:
+            md = df.to_markdown(index=False)
+            return md
+        except ImportError:
+            # tabulate 未安装
+            return None
+
+    except Exception:
+        # 解析失败
+        return None
 
 
 def recursive_split(text: str, max_size: int, min_size: int) -> List[str]:
@@ -217,58 +328,403 @@ def merge_short_sections(
     return buf
 
 
-def make_chunks_from_sections(sections: list, file_record: dict,
-                               max_size: int, min_size: int) -> List[dict]:
-    """
-    将 sections 列表展开为 ChunkRecord 列表。
+# ==============================================================================
+# 2-0c  表格处理优化（Phase 1：结构分离 + 格式转换）
+# ==============================================================================
 
-    sections 格式：
-        [{"section_id": str, "page_or_sheet": str, "text": str,
-          "section_title": str (optional)}, ...]
-
-    section_title：当文档采用"第2层切割"策略时，存放第1层标题文本，
-                   供对齐表审查时提供上下文（如"3.权责"）。
+def _split_into_segments(raw_text: str, table_html_list: list) -> list:
     """
+    将 Section 文本按表格位置分离为正文和表格片段序列。
+
+    参数:
+        raw_text: 原始 Section 文本（含 HTML 表格）
+        table_html_list: HTML 表格列表（按出现顺序）
+
+    返回:
+        segments 列表，每个元素为：
+        - {"type": "content", "text": "正文文本"}
+        - {"type": "table", "text": "Markdown表格", "html": "<table>..."}
+    """
+    if not table_html_list:
+        # 无表格，整个 section 作为正文
+        text = raw_text.strip()
+        if text:
+            return [{"type": "content", "text": text}]
+        return []
+
+    segments = []
+    last_end = 0
+
+    for table_html in table_html_list:
+        start = raw_text.find(table_html, last_end)
+        if start == -1:
+            continue
+
+        # 表格前的正文
+        if start > last_end:
+            content_text = raw_text[last_end:start].strip()
+            if content_text:
+                segments.append({"type": "content", "text": content_text})
+
+        # 表格本身（转换为 Markdown）
+        table_markdown = _convert_single_table_to_markdown(table_html)
+        segments.append({
+            "type": "table",
+            "text": table_markdown,   # Markdown 格式（用于 Embedding/Reranker/LLM）
+            "html": table_html,       # 原始 HTML（仅 Web 渲染用）
+        })
+
+        last_end = start + len(table_html)
+
+    # 最后一个表格后的正文
+    if last_end < len(raw_text):
+        content_text = raw_text[last_end:].strip()
+        if content_text:
+            segments.append({"type": "content", "text": content_text})
+
+    return segments
+
+
+def _convert_single_table_to_markdown(table_html: str) -> str:
+    """
+    将单个 HTML 表格转换为 Markdown。
+
+    参数:
+        table_html: 完整的 <table>...</table> HTML 字符串
+
+    返回:
+        Markdown 格式的表格字符串，转换失败时返回原 HTML
+    """
+    try:
+        import pandas as pd
+        from io import StringIO
+        dfs = pd.read_html(StringIO(table_html), header=0)
+        if dfs:
+            df = dfs[0].fillna('').astype(str).replace('nan', '')
+            return df.to_markdown(index=False)
+    except Exception:
+        pass
+    return table_html  # 转换失败返回原文
+
+
+def split_table_by_rows(table_html: str, max_rows: int = TABLE_MAX_ROWS) -> list:
+    """
+    按行数拆分表格，每个分块都保留表头。
+
+    参数:
+        table_html: 原始 HTML 表格
+        max_rows: 每个分块最大数据行数（不含表头）
+
+    返回:
+        拆分后的表格信息列表，每个元素包含:
+        - table_html: 拆分后的 HTML（含表头）
+        - table_markdown: 拆分后的 Markdown（含表头）
+        - row_range: (start, end) 行号范围
+        - row_count: 数据行数
+    """
+    try:
+        import pandas as pd
+        from io import StringIO
+        dfs = pd.read_html(StringIO(table_html), header=0)
+        if not dfs:
+            raise ValueError("No tables found")
+        df = dfs[0]
+    except Exception:
+        # 解析失败，返回原表格
+        return [{
+            "table_html": table_html,
+            "table_markdown": _convert_single_table_to_markdown(table_html),
+            "row_range": (0, 0),
+            "row_count": 0,
+        }]
+
+    total_rows = len(df)
+
+    # 行数 ≤ max_rows，不拆分
+    if total_rows <= max_rows:
+        md = df.fillna('').astype(str).replace('nan', '').to_markdown(index=False)
+        return [{
+            "table_html": table_html,
+            "table_markdown": md,
+            "row_range": (0, total_rows),
+            "row_count": total_rows,
+        }]
+
+    # 行数 > max_rows，按 max_rows 拆分
+    results = []
+    for start in range(0, total_rows, max_rows):
+        end = min(start + max_rows, total_rows)
+        sub_df = df.iloc[start:end]
+
+        sub_md = sub_df.fillna('').astype(str).replace('nan', '').to_markdown(index=False)
+        sub_html = sub_df.to_html(index=False, border=1)
+
+        results.append({
+            "table_html": sub_html,
+            "table_markdown": sub_md,
+            "row_range": (start, end),
+            "row_count": end - start,
+        })
+
+    return results
+
+
+def preprocess_section(section: dict) -> dict:
+    """
+    预处理 Section：转换格式 + 分离表格/正文。
+
+    输入:
+        section: {"section_id": "s0", "text": "...(含HTML表格)...", ...}
+
+    输出:
+        {
+            "section_id": "s0",
+            "page_or_sheet": "1",
+            "section_title": "章节标题",
+            "parent_text": "...(Markdown格式)...",  # 用于上下文
+            "segments": [
+                {"type": "content", "text": "正文A"},
+                {"type": "table", "text": "Markdown表格", "html": "<table>..."},
+                {"type": "content", "text": "正文B"},
+                ...
+            ]
+        }
+    """
+    raw_text = section["text"]
+
+    # 1. 提取所有 HTML 表格
+    _, table_html_list = html_table_to_markdown(raw_text)
+
+    # 2. 整体转换为 Markdown（用于 parent_text）
+    parent_text, _ = html_table_to_markdown(raw_text)
+
+    # 3. 分离表格和正文片段
+    segments = _split_into_segments(raw_text, table_html_list)
+
+    return {
+        "section_id": section["section_id"],
+        "page_or_sheet": section.get("page_or_sheet", "1"),
+        "section_title": section.get("section_title", ""),
+        "parent_text": parent_text,
+        "segments": segments,
+    }
+
+
+def _merge_short_content_chunks(raw_chunks: list, min_size: int) -> list:
+    """
+    合并短正文片段。
+
+    规则：
+    1. 优先合并到上一个同类型（正文）chunk
+    2. 不存在则合并到下一个同类型
+    3. 前后都是表格则单独保留
+
+    参数:
+        raw_chunks: 原始 chunk 列表（含 type 字段）
+        min_size: 短正文阈值（字符数）
+
+    返回:
+        合并后的 chunk 列表
+    """
+    if not raw_chunks:
+        return raw_chunks
+
+    result = []
+    pending_merge = []  # 待向后合并的短正文
+
+    for i, chunk in enumerate(raw_chunks):
+        # 先处理待向后合并的内容
+        if pending_merge and chunk["type"] == "content":
+            for pm in pending_merge:
+                chunk["text"] = pm["text"] + "\n" + chunk["text"]
+                chunk["char_count"] = chunk.get("char_count", 0) + pm.get("char_count", 0) + 1
+            pending_merge = []
+
+        # 非正文或不短，直接加入
+        if chunk["type"] != "content" or chunk.get("char_count", len(chunk["text"])) >= min_size:
+            result.append(chunk)
+            continue
+
+        # 短正文，尝试向上合并
+        merged = False
+        for j in range(len(result) - 1, -1, -1):
+            if result[j]["type"] == "content":
+                result[j]["text"] += "\n" + chunk["text"]
+                result[j]["char_count"] = result[j].get("char_count", 0) + chunk.get("char_count", 0) + 1
+                merged = True
+                break
+
+        if not merged:
+            # 无法向上合并，标记待向后合并
+            pending_merge.append(chunk)
+
+    # 处理末尾未合并的短正文（前后都是表格）
+    for pm in pending_merge:
+        result.append(pm)
+
+    return result
+
+
+def make_chunks_from_preprocessed_section(
+    preprocessed: dict,
+    file_record: dict,
+    rel_path_normalized: str,
+    max_size: int = 1200,
+    min_size: int = 100,
+    max_rows: int = TABLE_MAX_ROWS,
+) -> list:
+    """
+    从预处理后的 Section 生成 chunks。
+
+    参数:
+        preprocessed: preprocess_section() 的输出
+        file_record: 文件记录
+        rel_path_normalized: 归一化后的相对路径
+        max_size: 正文分块最大字符数
+        min_size: 短正文合并阈值
+        max_rows: 表格分块最大行数
+
+    返回:
+        chunks 列表，每个 chunk 包含完整字段
+    """
+    chunks = []
+    content_index = 0
+    table_index = 0
+
+    section_id = preprocessed["section_id"]
+    parent_id = f"{rel_path_normalized}#{section_id}"
+
+    # 先收集所有片段的初步 chunks
+    raw_chunks = []
+
+    for segment in preprocessed["segments"]:
+        if segment["type"] == "content":
+            # 正文按字符数分块
+            sub_texts = recursive_split(segment["text"], max_size, min_size)
+            if not sub_texts:
+                sub_texts = [segment["text"]] if segment["text"].strip() else []
+
+            for i, sub_text in enumerate(sub_texts):
+                if not sub_text.strip():
+                    continue
+                chunk_id = f"{rel_path_normalized}#{section_id}#c{content_index}"
+                if len(sub_texts) > 1:
+                    chunk_id += f"p{i}"
+                raw_chunks.append({
+                    "type": "content",
+                    "chunk_id": chunk_id,
+                    "text": sub_text,
+                    "char_count": count_meaningful_chars(sub_text),
+                })
+            content_index += 1
+
+        else:  # table
+            # 表格按行数分块
+            table_parts = split_table_by_rows(segment["html"], max_rows)
+            for i, part in enumerate(table_parts):
+                chunk_id = f"{rel_path_normalized}#{section_id}#t{table_index}"
+                if len(table_parts) > 1:
+                    chunk_id += f"p{i}"
+                raw_chunks.append({
+                    "type": "table",
+                    "chunk_id": chunk_id,
+                    "text": part["table_markdown"],
+                    "table_markdown": part["table_markdown"],
+                    "table_html": part["table_html"],
+                    "table_rows": part["row_count"],
+                    "char_count": count_meaningful_chars(part["table_markdown"]),
+                })
+            table_index += 1
+
+    # 短正文合并
+    raw_chunks = _merge_short_content_chunks(raw_chunks, min_size)
+
+    # 组装最终 chunks
+    for rc in raw_chunks:
+        chunk = {
+            "chunk_id": rc["chunk_id"],
+            "parent_id": parent_id,
+            "file_path": file_record["file_path"],
+            "file_name": file_record["file_name"],
+            "folder_code": file_record.get("folder_code"),
+            "page_or_sheet": preprocessed["page_or_sheet"],
+            "section_title": preprocessed["section_title"],
+            "text": rc["text"],
+            "char_count": rc.get("char_count", count_meaningful_chars(rc["text"])),
+        }
+
+        if rc["type"] == "table":
+            chunk["is_table"] = True
+            chunk["table_markdown"] = rc["table_markdown"]
+            chunk["table_html"] = rc["table_html"]
+            chunk["table_rows"] = rc["table_rows"]
+
+        chunks.append(chunk)
+
+    return chunks
+
+
+def make_chunks_from_sections(
+    sections: list,
+    file_record: dict,
+    max_size: int,
+    min_size: int,
+    max_rows: int = TABLE_MAX_ROWS,
+) -> dict:
+    """
+    将 sections 列表展开为 ChunkRecord 字典。
+
+    Phase 1 表格处理优化：
+    - 表格与正文分离，分别用不同策略分块
+    - 正文按字符数分块（max_size=1200）
+    - 表格按行数分块（max_rows=30），每块补表头
+    - parent_text 独立存储，避免冗余（节省 ~60MB）
+
+    参数:
+        sections: section 列表，格式：
+            [{"section_id": str, "page_or_sheet": str, "text": str,
+              "section_title": str (optional)}, ...]
+        file_record: 文件记录
+        max_size: 正文分块最大字符数
+        min_size: 短正文合并阈值
+        max_rows: 表格分块最大行数
+
+    返回:
+        {
+            "parents": {parent_id: parent_text, ...},
+            "chunks": [chunk_dict, ...]
+        }
+    """
+    # 1. Section 级别合并（保持原有逻辑）
     sections = merge_short_sections(sections, min_size=min_size, max_size=max_size)
 
     rel_path = file_record.get("relative_path", file_record["file_name"])
     rel_path_normalized = rel_path.replace(os.sep, "/")
 
-    chunks: List[dict] = []
+    parents = {}
+    chunks = []
+
     for section in sections:
-        section_id    = section["section_id"]
-        page_or_sheet = section["page_or_sheet"]
-        parent_text   = section["text"]
-        section_title = section.get("section_title", "")   # 第1层标题（可选）
-        parent_id     = f"{rel_path_normalized}#{section_id}"
+        # 2. Section 预处理（HTML→Markdown + 分离表格/正文）
+        preprocessed = preprocess_section(section)
+        parent_id = f"{rel_path_normalized}#{preprocessed['section_id']}"
 
-        sub_chunks = recursive_split(parent_text, max_size=max_size, min_size=min_size)
-        if not sub_chunks:
-            sub_chunks = [""]  # 保留空 section 占位
+        # 3. 存储 parent_text（独立存储，不重复）
+        if preprocessed["parent_text"].strip():
+            parents[parent_id] = preprocessed["parent_text"]
 
-        # 过滤无有效字符的 chunk（全为空格/制表符等），但空 section 的唯一占位保留
-        is_empty_section = (len(sub_chunks) == 1 and sub_chunks[0] == "")
-        if not is_empty_section:
-            sub_chunks = [t for t in sub_chunks if count_meaningful_chars(t) > 0]
-            if not sub_chunks:
-                continue  # 整个 section 无有效字符，跳过
+        # 4. 跳过空 section
+        if not preprocessed["segments"]:
+            continue
 
-        for m, sub_text in enumerate(sub_chunks):
-            chunks.append({
-                "chunk_id":      f"{parent_id}#c{m}",
-                "parent_id":     parent_id,
-                "file_path":     file_record["file_path"],
-                "file_name":     file_record["file_name"],
-                "folder_code":   file_record.get("folder_code"),
-                "page_or_sheet": page_or_sheet,
-                "chunk_index":   m,
-                "text":          sub_text,
-                "parent_text":   parent_text,
-                "section_title": section_title,
-                "char_count":    count_meaningful_chars(sub_text),
-            })
+        # 5. 生成 chunks
+        section_chunks = make_chunks_from_preprocessed_section(
+            preprocessed, file_record, rel_path_normalized,
+            max_size, min_size, max_rows
+        )
+        chunks.extend(section_chunks)
 
-    return chunks
+    return {"parents": parents, "chunks": chunks}
 
 
 # ==============================================================================
@@ -565,21 +1021,28 @@ def _assemble_image_section_text(
     """
     根据 VLM 分类结果组装 section text。
 
-    对于 文档扫描件/表格截图：追加 OCR 获取精确文本。
+    对于 文档扫描件/表格截图：调用 SDK 进行版面检测 + 结构化 OCR。
     对于其他类型：使用 VLM 描述。
 
     格式：
         [图片] 来源：{filename} 第{page}页 | 类型：{type}
         {description_or_ocr_text}
+
+    注意（冗余兜底逻辑）:
+        在 SDK 路径（parse_pdf_sdk）中，表格区域已被 PP-DocLayout-V3 识别并
+        用 "Table Recognition:" prompt OCR，VLM 看到的 image/chart 区域
+        通常不含表格。此处的表格 OCR 逻辑在 SDK 路径下理论上冗余，但作为
+        边界兜底（Paddle 可能漏判低质量表格截图）仍保留，且对 PyMuPDF 路径
+        和 DOCX/独立图片等场景仍有实际作用。
     """
     img_type    = vlm_result.get("type", "其他")
     description = vlm_result.get("description", "")
 
-    # 文档扫描件/表格截图 → 追加 OCR
+    # 文档扫描件/表格截图 → 使用 SDK 进行版面检测 + 结构化 OCR
     final_text = description
     if img_type in ("文档扫描件", "表格截图") and png_bytes is not None:
         try:
-            ocr_text = call_glmocr(png_bytes)
+            ocr_text = ocr_image_with_sdk(png_bytes, img_type=img_type)
             if ocr_text and count_meaningful_chars(ocr_text) > 10:
                 final_text = ocr_text  # OCR 文本替代 VLM 描述
         except Exception:
@@ -679,22 +1142,157 @@ def call_glmocr(img_bytes: bytes) -> str:
     return response.choices[0].message.content or ""
 
 
+def ocr_image_with_sdk(img_bytes: bytes, img_type: str = "文档扫描件") -> str:
+    """
+    使用 GlmOcr SDK 对单张图片进行版面检测 + 结构化 OCR。
+
+    相比 call_glmocr()（model-only），SDK 方式的优势：
+      - 版面检测自动区分 text/table/formula 区域
+      - 表格区域使用 "Table Recognition:" prompt → 输出 HTML <table>
+      - 结构化输出，表格识别更准确
+
+    参数:
+        img_bytes: PNG 格式图片字节流
+        img_type: VLM 分类结果（用于日志，不影响 SDK 行为）
+
+    返回:
+        识别出的文本（Markdown 格式，表格为 HTML）
+
+    注意:
+        - 首次调用会初始化 SDK（约 4 秒加载 PP-DocLayout-V3）
+        - 后续调用复用单例实例
+        - 若 SDK 初始化失败，回退到 call_glmocr()
+    """
+    import tempfile
+    import os as _os
+
+    try:
+        sdk = _init_sdk()
+    except Exception as e:
+        print(f"  [警告] SDK 初始化失败，回退到 model-only OCR：{e}")
+        return call_glmocr(img_bytes)
+
+    # SDK.parse() 需要文件路径，将图片字节写入临时文件
+    try:
+        with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp:
+            tmp.write(img_bytes)
+            tmp_path = tmp.name
+
+        result = sdk.parse(tmp_path, save_layout_visualization=False)
+
+        # 提取 markdown 结果
+        markdown = ""
+        if hasattr(result, 'markdown_result') and result.markdown_result:
+            markdown = result.markdown_result
+        else:
+            markdown = str(result)
+
+        # 清理临时文件
+        try:
+            _os.unlink(tmp_path)
+        except Exception:
+            pass
+
+        return markdown.strip() if markdown else ""
+
+    except Exception as e:
+        print(f"  [警告] SDK OCR 失败，回退到 model-only：{e}")
+        # 清理临时文件
+        try:
+            _os.unlink(tmp_path)
+        except Exception:
+            pass
+        return call_glmocr(img_bytes)
+
+
 # ==============================================================================
 # 2-1  PDF 提取
 # ==============================================================================
 
-def classify_pdf(doc) -> str:
+
+# ==============================================================================
+# 2-1v2  PDF v2 路径：glmocr SDK 流水线
+# ==============================================================================
+
+# SDK 单例实例（懒加载，由 _init_sdk() 管理）
+_sdk_instance = None
+
+
+def _init_sdk():
     """
-    判断 PDF 类型：
-      "ppt"     - PPT 转 PDF（横向页面 + 碎片文字或大量图片）
-      "scanned" - 扫描件（有效字符极少）
-      "normal"  - 普通文字 PDF
+    SDK 实例的懒加载管理（单例模式）。
+
+    首次调用时初始化 GlmOcr（约 4 秒加载 PP-DocLayout-V3 版面检测模型），
+    后续调用复用同一实例。进程退出时自然释放。
+
+    动态注入配置：
+      - OCR 服务地址/端口/模型名 ← config.py GLM_OCR_BASE_URL / GLM_OCR_MODEL
+      - 版面检测 GPU ← config.py SDK_LAYOUT_DEVICE
+      - PDF 渲染 DPI ← config.py SDK_PDF_DPI（覆盖 sdk_config.yaml 中的 pdf_dpi）
+
+    PP-DocLayout-V3 是本地推理模型，不需要开启独立服务/端口。
+    GlmOcr 初始化时加载模型权重到 GPU 显存，以单例模式常驻，
+    调用 parse() 时直接推理，进程退出时自然释放显存。
+
+    Returns:
+        GlmOcr 实例
+    """
+    global _sdk_instance
+    if _sdk_instance is not None and SDK_REUSE_INSTANCE:
+        return _sdk_instance
+
+    from glmocr import GlmOcr, load_config
+
+    # 从 config.py 的 GLM_OCR_BASE_URL 解析 host 和 port
+    # GLM_OCR_BASE_URL 格式如 "http://localhost:8080/v1"
+    from urllib.parse import urlparse
+    parsed = urlparse(_GLM_OCR_BASE_URL)
+    ocr_host = parsed.hostname or "localhost"
+    ocr_port = parsed.port or 8080
+
+    # 加载 yaml 配置并动态覆盖 DPI
+    config = load_config(SDK_CONFIG_PATH)
+    if hasattr(config, 'pipeline') and hasattr(config.pipeline, 'page_loader'):
+        config.pipeline.page_loader.pdf_dpi = SDK_PDF_DPI
+
+    print(f"  初始化 GlmOcr SDK（版面检测 GPU={SDK_LAYOUT_DEVICE}, DPI={SDK_PDF_DPI}）...",
+          flush=True)
+    import time as _time
+    t0 = _time.time()
+
+    _sdk_instance = GlmOcr(
+        config_path=SDK_CONFIG_PATH,
+        ocr_api_host=ocr_host,
+        ocr_api_port=ocr_port,
+        model=_GLM_OCR_MODEL,
+        cuda_visible_devices=SDK_LAYOUT_DEVICE,
+    )
+
+    elapsed = _time.time() - t0
+    print(f"  ✓ GlmOcr SDK 初始化完成（{elapsed:.1f}s）")
+
+    return _sdk_instance
+
+
+def classify_pdf_v2(doc) -> str:
+    """
+    v2 整文档级 PDF 分流，返回 "pymupdf" 或 "sdk"。
+
+    分流逻辑：
+      1. PPT 判断（复用现有 PPT 检测逻辑）→ 命中返回 "sdk"
+      2. 逐页统计有效字符数
+      3. 存在任何一页 < PDF_PAGE_MIN_CHARS → 返回 "sdk"（混合 PDF / 扫描件）
+      4. 全部页 >= PDF_PAGE_MIN_CHARS → 返回 "pymupdf"（纯文字 PDF）
+
+    与 v1 classify_pdf() 的区别：
+      - v1 用页均字符判断，会漏掉混合 PDF
+      - v2 逐页检测，任一页低于阈值即走 SDK
     """
     total_pages = len(doc)
     if total_pages == 0:
-        return "normal"
+        return "pymupdf"
 
-    # ── PPT 转 PDF 判断（只看前 N 页）───────────────────────────────────────
+    # ── PPT 转 PDF 判断（复用现有逻辑）──────────────────────────────────────
     sample_pages = [doc[i] for i in range(min(PDF_SAMPLE_PAGES, total_pages))]
 
     aspect_ratios   = []
@@ -719,52 +1317,480 @@ def classify_pdf(doc) -> str:
     mean_imgs      = sum(img_counts)      / len(img_counts)
 
     if mean_aspect > PDF_PPT_ASPECT_RATIO and (mean_blk_chars < PDF_PPT_AVG_BLOCK_CHARS or mean_imgs >= PDF_PPT_AVG_IMAGES):
-        return "ppt"
+        return "sdk"
 
-    # ── 扫描件判断（遍历全文）───────────────────────────────────────────────
-    total_meaningful = sum(count_meaningful_chars(page.get_text()) for page in doc)
-    if total_meaningful / total_pages < PDF_SCANNED_CHARS_PER_PAGE:
-        return "scanned"
+    # ── 逐页检测有效字符（v2 核心改进）──────────────────────────────────────
+    for page in doc:
+        page_chars = count_meaningful_chars(page.get_text())
+        if page_chars < PDF_PAGE_MIN_CHARS:
+            return "sdk"
 
-    return "normal"
+    return "pymupdf"
 
 
-def ocr_pdf(doc, source_path: str = "") -> List[dict]:
+def _rebuild_title_levels_rule(titles: list) -> list:
     """
-    对扫描件 / PPT 转 PDF 逐页 OCR，返回 section 列表。
-    增强：OCR 质量差的页面（有效字符 < 20），追加 VLM 描述作为语义补充。
+    规则方案：用编号模式推断标题层级。
+
+    输入:
+        [{"index": 0, "sdk_label": "doc_title"|"paragraph_title",
+          "raw_text": "1.1 目的"}, ...]
+
+    输出:
+        [{"index": 0, "level": 2, "text": "1.1 目的"}, ...]
+
+    逻辑:
+        - sdk_label == "doc_title" → level = 1
+        - sdk_label == "paragraph_title" → 调用 _heading_numeric_level()
+          - 返回 > 0 → 使用返回值
+          - 返回 0（无编号）→ 默认 level = 2
     """
+    result = []
+    for t in titles:
+        idx = t["index"]
+        text = t["raw_text"]
+        label = t["sdk_label"]
+
+        if label == "doc_title":
+            level = 1
+        else:
+            # paragraph_title → 用编号模式推断
+            lv = _heading_numeric_level(text)
+            level = lv if lv > 0 else 2
+
+        result.append({"index": idx, "level": level, "text": text})
+
+    return result
+
+
+def _rebuild_title_levels_llm(titles: list, file_name: str = "") -> list:
+    """
+    LLM 方案：将标题序列发给 LLM 推断层级。
+
+    输入/输出格式同 _rebuild_title_levels_rule()。
+    file_name: 文件名，作为 LLM 上下文信息辅助判断。
+
+    逻辑:
+        1. 加载 src/prompts/title_level_rebuild.txt 模板
+        2. 构建 JSON 标题列表 + 文件名上下文传入 LLM
+        3. 解析返回的 JSON 数组 [{index, level}]
+        4. 失败时回退到规则方案
+    """
+    import json as _json
+    from pathlib import Path
+
+    # 加载 prompt 模板
+    prompt_path = Path(__file__).parent / "prompts" / "title_level_rebuild.txt"
+    try:
+        prompt_template = prompt_path.read_text(encoding="utf-8")
+    except Exception as e:
+        print(f"  [警告] 加载标题层级 prompt 失败：{e}，回退到规则方案")
+        return _rebuild_title_levels_rule(titles)
+
+    # 构建输入 JSON
+    titles_for_llm = [
+        {"index": t["index"], "sdk_label": t["sdk_label"], "raw_text": t["raw_text"]}
+        for t in titles
+    ]
+    titles_json = _json.dumps(titles_for_llm, ensure_ascii=False, indent=2)
+    prompt = prompt_template.replace("{titles_json}", titles_json)
+    prompt = prompt.replace("{file_name}", file_name or "未知文件")
+
+    # 调用 LLM
+    try:
+        from openai import OpenAI
+        client = OpenAI(
+            api_key=DRAFT_LLM_API_KEY,
+            base_url=DRAFT_LLM_BASE_URL if DRAFT_LLM_BASE_URL.endswith("/v1")
+                     else DRAFT_LLM_BASE_URL + "/v1",
+        )
+        response = client.chat.completions.create(
+            model=DRAFT_LLM_MODEL,
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.1,
+            max_tokens=4096,
+        )
+        raw_response = response.choices[0].message.content or ""
+
+        # 解析 JSON（处理可能的 markdown 代码块包裹）
+        json_str = raw_response.strip()
+        if json_str.startswith("```"):
+            # 去除 ```json ... ``` 包裹
+            lines = json_str.split("\n")
+            lines = [l for l in lines if not l.strip().startswith("```")]
+            json_str = "\n".join(lines)
+
+        levels = _json.loads(json_str)
+
+        # 校验完整性
+        if len(levels) != len(titles):
+            print(f"  [警告] LLM 返回标题数 {len(levels)} ≠ 输入 {len(titles)}，回退到规则方案")
+            return _rebuild_title_levels_rule(titles)
+
+        # 构建结果
+        result = []
+        for item, orig in zip(levels, titles):
+            level = int(item.get("level", 2))
+            level = max(1, min(6, level))  # 限制范围 1-6
+            result.append({
+                "index": orig["index"],
+                "level": level,
+                "text": orig["raw_text"],
+            })
+
+        return result
+
+    except Exception as e:
+        print(f"  [警告] LLM 标题层级推断失败：{e}，回退到规则方案")
+        return _rebuild_title_levels_rule(titles)
+
+
+def _parse_sdk_markdown(markdown: str, titles_with_levels: list) -> list:
+    """
+    基于标题层级重建结果，将 SDK Markdown 切割为 section 列表。
+
+    输入:
+        markdown: SDK 输出的 Markdown 文本
+        titles_with_levels: 标题层级重建结果
+            [{"index": 0, "level": 2, "text": "1.1 目的"}, ...]
+
+    输出:
+        [{"section_id": "s0", "page_or_sheet": "1",
+          "text": "...", "section_title": ""}, ...]
+
+    算法:
+        Step 1: 将 Markdown 中的 # / ## 标题行匹配到 titles_with_levels，
+                替换为真实层级
+        Step 2: 确定切割层级（复用 DOCX 的动态策略）
+        Step 3: 按 cut_level 分割 section
+    """
+    lines = markdown.split("\n")
+
+    # ── Step 1: 标题行匹配 + 层级替换 ────────────────────────────────────────
+    # 构建标题文本到层级的映射（按顺序消费）
+    title_queue = list(titles_with_levels)  # 复制，避免修改原列表
+    title_idx = 0  # 下一个待匹配的标题索引
+
+    # 标记每行：是否标题、层级
+    line_records = []
+    for line in lines:
+        stripped = line.strip()
+        # 匹配 # 或 ## 开头的标题行
+        heading_match = re.match(r'^(#{1,6})\s+(.+)$', stripped)
+        if heading_match and title_idx < len(title_queue):
+            heading_text = heading_match.group(2).strip()
+            expected_text = title_queue[title_idx]["text"].strip()
+
+            # 模糊匹配：标题文本是否一致（SDK markdown 中标题文本应与 json_result 一致）
+            if heading_text == expected_text or heading_text.startswith(expected_text[:10]):
+                level = title_queue[title_idx]["level"]
+                title_idx += 1
+                line_records.append({
+                    "is_title": True,
+                    "level":    level,
+                    "text":     heading_text,
+                    "raw_line": line,
+                })
+                continue
+
+        # 非标题行（普通文本、表格、空行等）
+        line_records.append({
+            "is_title": False,
+            "level":    0,
+            "text":     line,
+            "raw_line": line,
+        })
+
+    # ── Step 2: 确定切割层级（复用 DOCX 动态策略） ───────────────────────────
+    max_level = 0
+    for rec in line_records:
+        if rec["is_title"] and rec["level"] > max_level:
+            max_level = rec["level"]
+
+    # 无标题 → 整文件作一个 section
+    if max_level == 0:
+        full_text = "\n".join(r["text"] for r in line_records).strip()
+        if not full_text:
+            return []
+        return [{
+            "section_id":    "doc",
+            "page_or_sheet": "1",
+            "text":          full_text,
+            "section_title": "",
+        }]
+
+    # max_level <= 2 → cut_level = 1
+    # max_level >= 3 → cut_level = 2
+    cut_level = 1 if max_level <= 2 else 2
+
+    # ── Step 3: 按 cut_level 分割 section ────────────────────────────────────
     sections = []
-    for i, page in enumerate(doc):
-        img_bytes = page.get_pixmap(dpi=PDF_OCR_DPI).tobytes("png")
-        ocr_text  = call_glmocr(img_bytes)
+    current_l1     = ""      # 第1层标题（仅 cut_level=2 时用作 section_title）
+    current_title  = ""      # 当前 section 的标题行
+    body_parts     = []
+    counter        = 0
 
-        # OCR 质量检查：有效字符过少时 VLM 补充
-        meaningful = count_meaningful_chars(ocr_text)
-        if meaningful < 20:
+    def _flush():
+        nonlocal counter
+        body     = "\n".join(body_parts).strip()
+        sec_text = (current_title + "\n" + body).strip() if current_title else body
+        if sec_text:
+            sections.append({
+                "section_id":    f"s{counter}",
+                "page_or_sheet": "1",  # SDK 不提供逐行页码，统一为 "1"
+                "text":          sec_text,
+                "section_title": current_l1 if cut_level == 2 else "",
+            })
+            counter += 1
+
+    for rec in line_records:
+        if not rec["is_title"]:
+            body_parts.append(rec["text"])
+            continue
+
+        lv = rec["level"]
+
+        if cut_level == 1:
+            # 所有标题都触发切割
+            _flush()
+            current_title = rec["text"]
+            body_parts    = []
+        else:
+            # cut_level == 2
+            if lv == 1:
+                # 第1层：不切，更新 l1 上下文；将标题文本并入当前 body
+                _flush()
+                current_l1    = rec["text"]
+                current_title = ""
+                body_parts    = [rec["text"]]  # l1 标题保留在正文开头
+            elif lv == 2:
+                # 第2层：触发切割
+                _flush()
+                current_title = rec["text"]
+                body_parts    = []
+            else:
+                # 第3层及以下：不切，作为正文保留
+                body_parts.append(rec["text"])
+
+    _flush()
+
+    return sections
+
+
+def _extract_sdk_images(json_result, doc, file_record: dict) -> list:
+    """
+    处理 SDK JSON 中 label=="image" 或 "chart" 的区域。
+
+    输入:
+        json_result: SDK 的 json_result（分页数组，每页含区域列表）
+                     格式: [[{index, label, native_label, bbox_2d, content, ...}, ...], ...]
+        doc: fitz.Document（用于按 bbox 裁切图片）
+        file_record: 文件记录
+
+    输出:
+        image section 列表
+
+    逻辑:
+        1. 遍历 json_result 的每页每个区域
+        2. 筛选 native_label 为 "image" 或 "chart" 的区域
+        3. 用 bbox 坐标从对应页面裁切图片（page.get_pixmap(clip=rect)）
+        4. 保存裁切图片到 SDK_IMAGE_CACHE_DIR（供后续 VLM 描述溯源）
+        5. 调用 _process_single_image() → VLM 分类+描述
+        6. 返回 image sections
+
+    注意（冗余兜底逻辑）:
+        在 SDK 路径中，PP-DocLayout-V3 已将表格区域识别为 `table` 类型并用
+        "Table Recognition:" prompt 进行结构化 OCR，因此这里 VLM 看到的
+        image/chart 区域**通常不包含表格**。后续 _process_single_image 中
+        对"文档扫描件/表格截图"类型追加 OCR 的逻辑，在 SDK 路径下理论上冗余，
+        但作为边界兜底（Paddle 可能漏判低质量表格截图）仍保留。
+    """
+    import fitz
+
+    sections   = []
+    filename    = file_record.get("file_name", "")
+    folder_code = file_record.get("folder_code")
+    source_path = file_record.get("relative_path", filename)
+    global_img_idx = 0
+
+    # 文件级图片缓存目录：sdk_images/{文件名去扩展名}/
+    file_stem = os.path.splitext(filename)[0]
+    img_dir = os.path.join(SDK_IMAGE_CACHE_DIR, file_stem)
+
+    if not json_result or not isinstance(json_result, list):
+        return sections
+
+    for page_idx, page_regions in enumerate(json_result):
+        if page_idx >= len(doc):
+            break  # json_result 页数超出 PDF 页数
+
+        page = doc[page_idx]
+
+        if not isinstance(page_regions, list):
+            continue
+
+        for region in page_regions:
+            native_label = region.get("native_label", "")
+            if native_label not in ("image", "chart"):
+                continue
+
+            # 获取 bbox 坐标
+            bbox = region.get("bbox_2d")
+            if not bbox or len(bbox) != 4:
+                continue
+
             try:
-                vlm_result = call_vlm_classify(
-                    img_bytes=_resize_image_bytes(img_bytes),
-                    page=str(i + 1),
-                    idx=0,
+                # bbox_2d 格式: [x0, y0, x1, y1]（像素坐标，基于 SDK 渲染 DPI）
+                # SDK 默认 pdf_dpi=SDK_PDF_DPI，PyMuPDF 默认 72 DPI
+                # 需要将 SDK bbox 坐标转换为 PyMuPDF 坐标系
+                scale = 72.0 / SDK_PDF_DPI
+                rect = fitz.Rect(
+                    bbox[0] * scale,
+                    bbox[1] * scale,
+                    bbox[2] * scale,
+                    bbox[3] * scale,
+                )
+
+                # 裁切图片（使用较高 DPI 获取清晰图片）
+                clip_dpi = 150  # 裁切用 DPI
+                mat = fitz.Matrix(clip_dpi / 72.0, clip_dpi / 72.0)
+                pix = page.get_pixmap(matrix=mat, clip=rect)
+                png_bytes = pix.tobytes("png")
+                w, h = pix.width, pix.height
+
+                # 保存裁切图片到本地（供后续 VLM 描述溯源）
+                img_filename = f"p{page_idx + 1}_{native_label}_{global_img_idx}.png"
+                try:
+                    os.makedirs(img_dir, exist_ok=True)
+                    img_path = os.path.join(img_dir, img_filename)
+                    with open(img_path, "wb") as f:
+                        f.write(png_bytes)
+                except Exception:
+                    pass  # 保存失败不影响提取
+
+                text = _process_single_image(
+                    png_bytes, w, h,
+                    filename=filename,
+                    page=str(page_idx + 1),
+                    idx=global_img_idx,
+                    folder_code=folder_code,
                     source_path=source_path,
                 )
-                if vlm_result and vlm_result.get("description"):
-                    vlm_desc = f"类型：{vlm_result['type']} | {vlm_result['description']}"
-                    if ocr_text.strip():
-                        ocr_text = f"{ocr_text}\n[VLM补充] {vlm_desc}"
-                    else:
-                        ocr_text = f"[VLM描述] {vlm_desc}"
-            except Exception:
-                pass  # VLM 失败不影响 OCR 结果
+                global_img_idx += 1
 
-        sections.append({
-            "section_id":    f"p{i + 1}",
-            "page_or_sheet": str(i + 1),
-            "text":          ocr_text,
-            "section_title": "",
-        })
+                if text is None:
+                    continue
+
+                sections.append({
+                    "section_id":    f"img_sdk_p{page_idx + 1}_{global_img_idx}",
+                    "page_or_sheet": str(page_idx + 1),
+                    "text":          text,
+                    "section_title": "",
+                })
+
+            except Exception as e:
+                print(f"  [警告] SDK 图片区域处理失败（页{page_idx + 1}）：{e}")
+                continue
+
     return sections
+
+
+def parse_pdf_sdk(file_record: dict) -> list:
+    """
+    SDK 流水线的完整 PDF 提取入口（v2，替代 ocr_pdf）。
+
+    流程:
+        1. 调用 GlmOcr.parse() → 获取 markdown + json_result
+        2. 从 markdown 提取标题列表（# → doc_title, ## → paragraph_title）
+        3. 标题层级重建（rule 或 llm 模式）
+        4. Markdown 切割为 section 列表
+        5. 处理 json_result 中的 image/chart 区域
+        6. 合并文本 sections + image sections
+
+    参数:
+        file_record: 文件记录 dict
+
+    返回:
+        section 列表
+    """
+    import fitz
+
+    file_path = file_record["file_path"]
+    file_name = file_record.get("file_name", "")
+
+    # ── 1. SDK 解析 ──────────────────────────────────────────────────────────
+    try:
+        sdk = _init_sdk()
+        import time as _time
+        t0 = _time.time()
+        print(f"    SDK 解析中：{file_name} ...", flush=True)
+        result = sdk.parse(file_path, save_layout_visualization=False)
+        elapsed = _time.time() - t0
+        print(f"    ✓ SDK 解析完成（{elapsed:.1f}s）：{file_name}")
+    except Exception as e:
+        print(f"  [错误] SDK 解析失败：{file_name} — {e}")
+        return []
+
+    # ── 2. 获取结果 ──────────────────────────────────────────────────────────
+    markdown = ""
+    if hasattr(result, 'markdown_result') and result.markdown_result:
+        markdown = result.markdown_result
+    else:
+        markdown = str(result)
+
+    json_result = None
+    if hasattr(result, 'json_result'):
+        json_result = result.json_result
+
+    if not markdown.strip():
+        print(f"  [警告] SDK 返回空 markdown：{file_name}")
+        return []
+
+    # ── 3. 提取标题列表 ──────────────────────────────────────────────────────
+    # 扫描 markdown 中 # / ## 开头的行
+    title_list = []
+    title_index = 0
+    for line in markdown.split("\n"):
+        stripped = line.strip()
+        heading_match = re.match(r'^(#{1,6})\s+(.+)$', stripped)
+        if heading_match:
+            level_markers = heading_match.group(1)
+            heading_text = heading_match.group(2).strip()
+            # # → doc_title, ## → paragraph_title
+            if len(level_markers) == 1:
+                sdk_label = "doc_title"
+            else:
+                sdk_label = "paragraph_title"
+
+            title_list.append({
+                "index":     title_index,
+                "sdk_label": sdk_label,
+                "raw_text":  heading_text,
+            })
+            title_index += 1
+
+    # ── 4. 标题层级重建 ──────────────────────────────────────────────────────
+    if title_list:
+        if TITLE_REBUILD_MODE == "llm":
+            titles_with_levels = _rebuild_title_levels_llm(title_list, file_name=file_name)
+        else:
+            titles_with_levels = _rebuild_title_levels_rule(title_list)
+    else:
+        titles_with_levels = []
+
+    # ── 5. Markdown 切割为 section ───────────────────────────────────────────
+    text_sections = _parse_sdk_markdown(markdown, titles_with_levels)
+
+    # ── 6. 图片区域处理 ──────────────────────────────────────────────────────
+    image_sections = []
+    if json_result:
+        try:
+            doc = fitz.open(file_path)
+            image_sections = _extract_sdk_images(json_result, doc, file_record)
+        except Exception as e:
+            print(f"  [警告] SDK 图片区域处理失败：{file_name} — {e}")
+
+    return text_sections + image_sections
 
 
 def _find_title_threshold(
@@ -997,18 +2023,27 @@ def _extract_pdf_images(doc, file_record: dict) -> List[dict]:
 
 
 def _extract_pdf_sections(file_record: dict) -> List[dict]:
-    """PDF 文本提取：返回 section 列表（不分块）。含嵌入式图片提取。"""
+    """
+    PDF 文本提取：返回 section 列表（不分块）。含嵌入式图片提取。
+
+    v2 路由逻辑：
+      - classify_pdf_v2 → "pymupdf" → parse_normal_pdf + _extract_pdf_images（不变）
+      - classify_pdf_v2 → "sdk"     → parse_pdf_sdk（SDK 内含图片处理）
+    """
     try:
         import fitz
-        doc      = fitz.open(file_record["file_path"])
-        pdf_type = classify_pdf(doc)
-        source_path = file_record.get("relative_path", file_record.get("file_name", ""))
-        if pdf_type in ("ppt", "scanned"):
-            text_sections = ocr_pdf(doc, source_path=source_path)
+        doc   = fitz.open(file_record["file_path"])
+        route = classify_pdf_v2(doc)
+
+        if route == "sdk":
+            # SDK 路径：文本 + 图片处理已内含在 parse_pdf_sdk 中
+            sections = parse_pdf_sdk(file_record)
         else:
-            text_sections = parse_normal_pdf(doc)
-        img_sections = _extract_pdf_images(doc, file_record)
-        return text_sections + img_sections
+            # PyMuPDF 路径：完全不变
+            sections = parse_normal_pdf(doc)
+            sections.extend(_extract_pdf_images(doc, file_record))
+
+        return sections
     except Exception as e:
         print(f"  [警告] PDF 提取失败：{file_record['file_name']} — {e}")
         return []
@@ -1017,7 +2052,13 @@ def _extract_pdf_sections(file_record: dict) -> List[dict]:
 def extract_pdf(file_record: dict) -> List[dict]:
     """
     PDF 提取对外入口。
-    自动判断类型（normal / ppt / scanned）并分发到对应提取函数。
+
+    v2 分流策略（两分类，互补）：
+      - pymupdf：纯文字 PDF（非 PPT 转 PDF，且所有页均 ≥ PDF_PAGE_MIN_CHARS 字符）
+                 → parse_normal_pdf() + _extract_pdf_images()
+      - sdk：需要 OCR 的 PDF（PPT 转 PDF、扫描件、或混合型——存在任一页 < 阈值）
+             → parse_pdf_sdk()（SDK 内含版面检测 + OCR + 图片处理）
+
     异常时打印警告并返回空列表，不向外抛出。
     """
     sections = _extract_pdf_sections(file_record)
@@ -1782,12 +2823,12 @@ def extract_ppt(file_record: dict) -> List[dict]:
 
 def _extract_image_sections(file_record: dict) -> List[dict]:
     """
-    独立图片提取（JPG/PNG）— VLM 分类+描述优先，文档/表格追加 OCR。
+    独立图片提取（JPG/PNG）— VLM 分类+描述优先，文档/表格使用 SDK OCR。
 
     改进点（相比原版统一走 GLM-OCR）：
     - 原版：所有图片统一送 GLM-OCR → 照片/LOGO 返回乱码
-    - 新版：VLM 分类+描述 → 文档/表格类追加 OCR → 组装 section
-    - VLM 不可用时回退到原始 GLM-OCR 逻辑（向后兼容）
+    - 新版：VLM 分类+描述 → 文档/表格类使用 SDK 版面检测 + 结构化 OCR
+    - VLM 不可用时回退到 SDK OCR（利用版面检测能力）
     """
     try:
         from PIL import Image
@@ -1815,9 +2856,9 @@ def _extract_image_sections(file_record: dict) -> List[dict]:
         )
 
         if text is None:
-            # VLM 不可用或被过滤 → 回退到 GLM-OCR（保持向后兼容）
+            # VLM 不可用或被过滤 → 回退到 SDK OCR（利用版面检测能力）
             if _filter_image(png_bytes, w, h):
-                text = call_glmocr(png_bytes)
+                text = ocr_image_with_sdk(png_bytes, img_type="独立图片")
             else:
                 return []
 
@@ -1835,10 +2876,12 @@ def _extract_image_sections(file_record: dict) -> List[dict]:
 def extract_image(file_record: dict) -> List[dict]:
     """
     JPG / JPEG / PNG 提取对外入口。
-    整张图片作一个 section，调用 GLM-OCR 识别文字。
 
-    GLM-OCR 服务不可用（连接失败、超时等）时打印警告并返回空列表，不向外抛出。
-    call_glmocr() 要求 PNG 格式，使用 Pillow 将 JPG 转换后传入。
+    处理流程：
+      1. VLM 分类+描述 → 文档/表格类使用 SDK 版面检测 + 结构化 OCR
+      2. VLM 不可用时回退到 SDK OCR
+
+    SDK 初始化采用单例模式，首次加载约 4 秒，后续复用。
     """
     sections = _extract_image_sections(file_record)
     if not sections:
@@ -1886,3 +2929,77 @@ def extract_sections(file_record: dict) -> list[dict] | None:
     if extractor is None:
         return None
     return extractor(file_record)
+
+
+# ==============================================================================
+# Phase 2：Embedding 与上下文辅助函数
+# ==============================================================================
+
+def get_text_for_embedding(chunk: dict) -> str:
+    """
+    根据 chunk 类型选择用于 Embedding 的文本。
+
+    规则：
+    - 表格 chunk 且有 table_summary：使用纯摘要（语义密度高）
+    - 其他情况：使用 text 字段
+
+    用于 align_evidence.py 阶段 3 的 embed_chunks()
+    """
+    if chunk.get("is_table") and chunk.get("table_summary"):
+        return chunk["table_summary"]
+    return chunk.get("text", "")
+
+
+def get_chunk_context(
+    chunk: dict,
+    parents: dict,
+    max_parent_len: int = 2000,
+    context_chars: int = 300,
+) -> str:
+    """
+    获取 chunk 的上下文文本（用于 Reranker/LLM）。
+
+    参数:
+        chunk: chunk 记录
+        parents: {parent_id: parent_text} 字典
+        max_parent_len: parent_text 长度阈值
+        context_chars: 超过阈值时的上下文窗口
+
+    返回:
+        上下文文本（Markdown 格式）
+        - parent_text ≤ max_parent_len：返回完整 parent
+        - parent_text > max_parent_len：返回 chunk 前后各 context_chars 字
+    """
+    parent_id = chunk.get("parent_id", "")
+    parent_text = parents.get(parent_id, "")
+
+    if not parent_text:
+        return chunk.get("text", "")
+
+    # parent 较短，直接返回完整内容
+    if len(parent_text) <= max_parent_len:
+        return parent_text
+
+    # parent 过长，定位 chunk 并取前后文
+    chunk_text = chunk.get("text", "")
+
+    # 对于表格 chunk，用 table_markdown 定位更准确
+    if chunk.get("is_table"):
+        chunk_text = chunk.get("table_markdown", chunk_text)
+
+    pos = parent_text.find(chunk_text)
+    if pos == -1:
+        # 尝试模糊匹配（前几行）
+        lines = chunk_text.split("\n")
+        first_lines = "\n".join(lines[:min(3, len(lines))])
+        if first_lines:
+            pos = parent_text.find(first_lines)
+
+    if pos == -1:
+        return chunk.get("text", "")
+
+    start = max(0, pos - context_chars)
+    end = min(len(parent_text), pos + len(chunk_text) + context_chars)
+
+    return parent_text[start:end]
+

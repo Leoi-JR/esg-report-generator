@@ -63,6 +63,7 @@ from extractors import (
     extract_sections,
     make_chunks_from_sections,
     chunk_params,
+    get_text_for_embedding,  # Phase 2：Embedding 字段选择
 )
 
 from config import (
@@ -86,6 +87,7 @@ from config import (
     VLM_CACHE_PATH,
     FORCE_REEXTRACT,
     FORCE_RECHUNK,
+    ENABLE_TABLE_SUMMARY,  # Phase 2：表格摘要开关
 )
 
 
@@ -225,25 +227,40 @@ def print_phase1_summary(esg_mapping: dict, indicator_details: dict,
 # 阶段二缓存 — 读写 chunk_records（JSON 持久化）
 # ==============================================================================
 
-def save_chunks_cache(chunk_records: list, cache_path: str) -> None:
+def save_chunks_cache(chunks_data: dict, cache_path: str) -> None:
     """
-    将 chunk_records 序列化为 JSON 写入 cache_path。
+    将 chunks 数据序列化为 JSON 写入 cache_path。
+
+    Phase 1 表格优化新结构：
+        {
+            "parents": {parent_id: parent_text, ...},
+            "chunks": [chunk_dict, ...]
+        }
+
     文件不存在时自动创建；写入失败时打印警告，不中断主流程。
     """
     import json
     try:
         os.makedirs(os.path.dirname(cache_path), exist_ok=True)
         with open(cache_path, "w", encoding="utf-8") as f:
-            json.dump(chunk_records, f, ensure_ascii=False, indent=2)
+            json.dump(chunks_data, f, ensure_ascii=False, indent=2)
         size_mb = os.path.getsize(cache_path) / 1024 / 1024
-        print(f"  ✓ chunk 缓存已写入：{cache_path}（{size_mb:.1f} MB，{len(chunk_records)} 条）")
+        chunk_count = len(chunks_data.get("chunks", []))
+        parent_count = len(chunks_data.get("parents", {}))
+        print(f"  ✓ chunk 缓存已写入：{cache_path}（{size_mb:.1f} MB）")
+        print(f"    chunks: {chunk_count} 条, parents: {parent_count} 条")
     except Exception as e:
         print(f"  [警告] chunk 缓存写入失败：{e}")
 
 
-def load_chunks_cache(cache_path: str) -> list | None:
+def load_chunks_cache(cache_path: str) -> dict | None:
     """
-    从 cache_path 读取已缓存的 chunk_records。
+    从 cache_path 读取已缓存的 chunks 数据。
+
+    返回：
+        新结构：{"parents": {...}, "chunks": [...]}
+        兼容旧结构（列表）：自动转换为 {"parents": {}, "chunks": [...]}
+
     文件不存在或解析失败时返回 None（触发重新提取）。
     """
     import json
@@ -252,10 +269,15 @@ def load_chunks_cache(cache_path: str) -> list | None:
     try:
         with open(cache_path, "r", encoding="utf-8") as f:
             data = json.load(f)
-        if not isinstance(data, list):
-            print(f"  [警告] 缓存文件格式异常（非列表），将重新提取")
-            return None
-        return data
+        # 兼容旧格式（列表）
+        if isinstance(data, list):
+            print(f"  [兼容] 检测到旧格式缓存（列表），自动转换为新结构")
+            return {"parents": {}, "chunks": data}
+        # 新格式（字典）
+        if isinstance(data, dict) and "chunks" in data:
+            return data
+        print(f"  [警告] 缓存文件格式异常，将重新提取")
+        return None
     except Exception as e:
         print(f"  [警告] 缓存文件读取失败：{e}，将重新提取")
         return None
@@ -696,7 +718,10 @@ def embed_chunks(
     为每个 chunk_record 追加 "embedding" 字段，返回增强后的新列表。
     原始 chunk_records 不被修改。
 
-    向量化使用 chunk["text"] 字段（子块文本，不用 parent_text）。
+    向量化使用 get_text_for_embedding() 选择字段：
+    - 表格 chunk 且有 table_summary：使用纯摘要（语义密度高）
+    - 其他情况：使用 text 字段
+
     char_count == 0 的 chunk（空文本）embedding 设为 None，跳过 API 调用。
 
     返回：
@@ -705,7 +730,8 @@ def embed_chunks(
     """
     # 分离有效 chunk（有文本）和空 chunk（无文本）
     valid_indices = [i for i, c in enumerate(chunk_records) if c.get("char_count", 0) > 0]
-    valid_texts   = [chunk_records[i]["text"] for i in valid_indices]
+    # Phase 2：使用 get_text_for_embedding() 选择 embedding 输入文本
+    valid_texts   = [get_text_for_embedding(chunk_records[i]) for i in valid_indices]
 
     # 批量计算有效 chunk 的 embedding
     if valid_texts:
@@ -1390,9 +1416,12 @@ def main():
     }
 
     chunk_records = None
+    all_parents = {}
     if not FORCE_REEXTRACT and not FORCE_RECHUNK:
-        chunk_records = load_chunks_cache(CHUNK_CACHE_PATH)
-        if chunk_records is not None:
+        cached_data = load_chunks_cache(CHUNK_CACHE_PATH)
+        if cached_data is not None:
+            chunk_records = cached_data.get("chunks", [])
+            all_parents = cached_data.get("parents", {})
             print(f"  ✓ 从缓存加载 {len(chunk_records)} 个文本块（跳过重新分块）")
             print(f"    缓存路径：{CHUNK_CACHE_PATH}")
             print(f"    如需强制重新分块，请在 src/config.py 中设置 FORCE_RECHUNK = True")
@@ -1401,6 +1430,7 @@ def main():
         if FORCE_RECHUNK:
             print(f"  [强制重分块] FORCE_RECHUNK=True，忽略 chunks 缓存")
         chunk_records = []
+        all_parents = {}
         fr_by_relpath = {fr.get("relative_path", fr["file_name"]): fr
                          for fr in file_records}
         for rel_path, sections in all_sections.items():
@@ -1409,12 +1439,53 @@ def main():
                 continue
             file_type = _EXT_TYPE_MAP.get(fr["extension"], "pdf")
             _max, _min = chunk_params(file_type)
-            chunks = make_chunks_from_sections(sections, fr,
+            # Phase 1：make_chunks_from_sections 返回 {"parents": {...}, "chunks": [...]}
+            result = make_chunks_from_sections(sections, fr,
                                                max_size=_max, min_size=_min)
-            chunk_records.extend(chunks)
+            all_parents.update(result["parents"])
+            chunk_records.extend(result["chunks"])
 
-        print(f"  ✓ 共生成 {len(chunk_records)} 个文本块")
-        save_chunks_cache(chunk_records, CHUNK_CACHE_PATH)
+        # 统计表格 chunk 数量
+        table_chunk_count = sum(1 for c in chunk_records if c.get("is_table"))
+        print(f"  ✓ 共生成 {len(chunk_records)} 个文本块（含 {table_chunk_count} 个表格块）")
+        save_chunks_cache({"parents": all_parents, "chunks": chunk_records}, CHUNK_CACHE_PATH)
+
+    # ── 阶段 2c：表格摘要生成（Phase 2） ─────────────────────────────────────
+    print()
+    print("[阶段 2c] 表格摘要生成...")
+
+    if ENABLE_TABLE_SUMMARY:
+        # 检查是否有表格 chunk 需要生成摘要
+        table_chunks_without_summary = [
+            c for c in chunk_records
+            if c.get("is_table") and not c.get("table_summary")
+        ]
+
+        if table_chunks_without_summary:
+            print(f"  共 {len(table_chunks_without_summary)} 个表格 chunk 需要生成摘要...")
+
+            # 异步调用 LLM 生成摘要
+            import asyncio
+            from table_summarizer import generate_table_summaries
+
+            chunk_records = asyncio.run(
+                generate_table_summaries(chunk_records, all_parents)
+            )
+
+            # 更新缓存（摘要生成后 text 字段已更新）
+            save_chunks_cache({"parents": all_parents, "chunks": chunk_records}, CHUNK_CACHE_PATH)
+
+            summary_count = sum(1 for c in chunk_records
+                               if c.get("is_table") and c.get("table_summary"))
+            print(f"  ✓ 已生成 {summary_count} 个表格摘要")
+        else:
+            table_count = sum(1 for c in chunk_records if c.get("is_table"))
+            if table_count > 0:
+                print(f"  ✓ 所有 {table_count} 个表格 chunk 已有摘要（跳过生成）")
+            else:
+                print("  跳过（无表格 chunk）")
+    else:
+        print("  跳过（ENABLE_TABLE_SUMMARY=False）")
 
     # ── 阶段三：构建向量库 ────────────────────────────────────────────────
     print()
