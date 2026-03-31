@@ -3,6 +3,7 @@
 import React, { useState, useCallback, useRef } from 'react';
 import { useEditorStore } from '@/lib/store';
 import { AIAction, UploadedFile } from '@/lib/types';
+import { textToBlockHTML } from '@/lib/tiptap/content-transform';
 import {
   Sparkles,
   FileEdit,
@@ -45,7 +46,6 @@ export const AIPanel: React.FC = () => {
     setAiResponse('');
     setCurrentAction(action);
 
-    // Gather selected source texts
     const sourceTexts = currentSources
       .filter(s => selectedSourceIds.has(s.id))
       .map(s => ({ id: s.id, text: s.text }));
@@ -88,20 +88,42 @@ export const AIPanel: React.FC = () => {
     }
   }, [selectedChapterId, aiSelectedText, currentSources, selectedSourceIds, uploadedFiles]);
 
+  /**
+   * 将 AI 返回的文本转换为 Tiptap 兼容的 HTML 并插入编辑器。
+   * 使用 textToBlockHTML 确保 [来源X] 被正确渲染为可点击角标，
+   * 且段落结构和行距与现有内容保持一致。
+   */
+  const insertAIContent = useCallback((text: string, mode: 'replace' | 'append') => {
+    if (!tiptapEditor || !text) return;
+
+    // 将纯文本转换为带段落结构的 HTML（处理 [来源X] 等标记）
+    const html = textToBlockHTML(text);
+
+    if (mode === 'append') {
+      // 续写：在当前光标位置后追加
+      const { to } = tiptapEditor.state.selection;
+      tiptapEditor.chain().focus().insertContentAt(to, html, {
+        parseOptions: { preserveWhitespace: false }
+      }).run();
+    } else {
+      // 替换：删除选中内容并插入新内容
+      tiptapEditor.chain().focus().deleteSelection().insertContent(html, {
+        parseOptions: { preserveWhitespace: false }
+      }).run();
+    }
+  }, [tiptapEditor]);
+
   const handleAccept = useCallback(async () => {
     if (!tiptapEditor || !aiResponse || !selectedChapterId) return;
 
     if (currentAction === 'extend') {
-      // For extend, append after current cursor position
-      const { to } = tiptapEditor.state.selection;
-      tiptapEditor.chain().focus().insertContentAt(to, aiResponse).run();
+      insertAIContent(aiResponse, 'append');
     } else if (currentAction === 'polish' || currentAction === 'freeform') {
-      // For polish/freeform, replace the current selection if any, else insert at cursor
-      tiptapEditor.chain().focus().insertContent(aiResponse).run();
+      insertAIContent(aiResponse, 'replace');
     }
-    // For verify, don't replace anything
+    // verify 操作不替换任何内容
 
-    // Record acceptance (non-critical)
+    // 记录采纳（非关键操作）
     if (aiHistoryId) {
       fetch('/api/ai/accept', {
         method: 'POST',
@@ -113,7 +135,7 @@ export const AIPanel: React.FC = () => {
     setAiResponse('');
     setAiHistoryId(null);
     setCurrentAction(null);
-  }, [tiptapEditor, aiResponse, currentAction, aiHistoryId, selectedChapterId]);
+  }, [tiptapEditor, aiResponse, currentAction, aiHistoryId, selectedChapterId, insertAIContent]);
 
   const handleReject = useCallback(() => {
     setAiResponse('');
@@ -161,9 +183,9 @@ export const AIPanel: React.FC = () => {
   }, [setShowAIPanel]);
 
   return (
-    <div className="fixed right-[350px] top-14 bottom-8 w-[420px] bg-white border-l border-gray-200 shadow-xl z-30 flex flex-col">
+    <div className="h-full flex flex-col bg-white">
       {/* Header */}
-      <div className="flex items-center justify-between px-4 py-3 border-b border-gray-200 bg-gradient-to-r from-purple-50 to-white">
+      <div className="flex items-center justify-between px-4 py-3 border-b border-gray-200 bg-gradient-to-r from-purple-50 to-white flex-shrink-0">
         <div className="flex items-center gap-2">
           <Sparkles size={18} className="text-purple-600" />
           <h3 className="font-medium text-gray-700">AI 助手</h3>
@@ -181,7 +203,7 @@ export const AIPanel: React.FC = () => {
         {aiSelectedText && (
           <div className="px-4 py-3 border-b border-gray-100">
             <div className="text-xs text-gray-500 mb-1 font-medium">选中文本：</div>
-            <div className="text-sm text-gray-700 bg-gray-50 p-2 rounded max-h-24 overflow-y-auto">
+            <div className="text-sm text-gray-700 bg-gray-50 p-2 rounded max-h-24 overflow-y-auto leading-relaxed">
               {aiSelectedText.slice(0, 500)}
               {aiSelectedText.length > 500 && '...'}
             </div>
@@ -351,7 +373,7 @@ export const AIPanel: React.FC = () => {
             </div>
           ) : aiResponse ? (
             <div>
-              <div className="text-sm text-gray-700 bg-gray-50 p-3 rounded-lg whitespace-pre-wrap max-h-60 overflow-y-auto">
+              <div className="text-sm text-gray-700 bg-gray-50 p-3 rounded-lg whitespace-pre-wrap max-h-60 overflow-y-auto leading-relaxed">
                 {aiResponse}
               </div>
               <div className="flex items-center gap-2 mt-3 justify-end">

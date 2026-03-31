@@ -74,11 +74,10 @@ export const ContentEditor: React.FC = () => {
         const target = event.target as HTMLElement;
         if (target.classList.contains('source-tag') || target.closest('.source-tag')) {
           const el = target.classList.contains('source-tag') ? target : target.closest('.source-tag') as HTMLElement;
-          const sources = el?.getAttribute('data-sources');
-          if (sources) {
-            const firstSource = sources.split(',')[0];
-            highlightSource(firstSource);
-            const sourceElement = document.getElementById(`source-${firstSource}`);
+          const sourceId = el?.getAttribute('data-sources');
+          if (sourceId) {
+            highlightSource(sourceId);
+            const sourceElement = document.getElementById(`source-${sourceId}`);
             sourceElement?.scrollIntoView({ behavior: 'smooth', block: 'center' });
           }
           return true;

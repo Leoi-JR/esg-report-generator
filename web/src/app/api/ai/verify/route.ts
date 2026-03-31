@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { saveAIHistory } from '@/lib/db';
+import { buildPrompt } from '@/lib/prompt-loader';
 
 const LLM_BASE_URL = process.env.LLM_BASE_URL || 'http://127.0.0.1:8000';
 const LLM_API_KEY = process.env.LLM_API_KEY || 'sk-leoi-888';
@@ -19,22 +20,11 @@ export async function POST(request: NextRequest) {
       .map((s: { id: string; text: string }) => `【来源${s.id}】\n${s.text}`)
       .join('\n\n');
 
-    const prompt = `你是一位专业的 ESG 报告事实核查助手。请核查以下文本与来源资料的一致性。
-
-【待核查文本】
-${selected_text}
-
-${sourceContext ? `【参考来源资料】\n${sourceContext}` : '（无来源资料）'}
-
-请按以下格式回复：
-
-结论：✅ 一致 / ⚠️ 有差异 / ❌ 无法核实
-
-差异说明：
-（如有差异，详细说明待核查文本与来源资料之间的不一致之处）
-
-建议修改：
-（如有差异，给出修改建议）`;
+    // Build prompt from template
+    const prompt = buildPrompt('ai_verify', {
+      selected_text,
+      source_context: sourceContext,
+    });
 
     // Call LLM
     const llmResponse = await fetch(`${LLM_BASE_URL}/v1/chat/completions`, {

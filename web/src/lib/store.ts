@@ -98,6 +98,14 @@ function buildTreeFromResults(results: ChapterResult[]): TreeNode[] {
   return root;
 }
 
+/**
+ * 从 chunks 缓存中获取来源的完整文本
+ *
+ * 优先级（Phase 1-3 优化后）：
+ * 1. table_summary - 表格 chunk 使用 LLM 生成的摘要（更易读）
+ * 2. text - 普通文本或表格的原始 Markdown
+ * 3. '[原文未找到]' - 未匹配到 chunk
+ */
 function getSourcesWithText(
   chapter: ChapterResult | null,
   chunksCache: Map<string, ChunkRecord>
@@ -109,11 +117,14 @@ function getSourcesWithText(
 
   Object.entries(chapter.draft.sources_mapping).forEach(([id, mapping]) => {
     const chunk = chunksCache.get(mapping.chunk_id);
+    // 表格优先使用 table_summary（更简洁易读）
+    const displayText = chunk?.table_summary || chunk?.text || '[原文未找到]';
     sources.push({
       ...mapping,
       id,
-      text: chunk?.text || '[原文未找到]',
+      text: displayText,
       is_cited: citedSources.has(id),
+      is_table: chunk?.is_table || false,
     });
   });
 

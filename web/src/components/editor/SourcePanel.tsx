@@ -4,7 +4,7 @@ import React, { useState } from 'react';
 import { useEditorStore } from '@/lib/store';
 import { SourceWithText } from '@/lib/types';
 import { cn, formatScore, truncateText } from '@/lib/utils';
-import { Paperclip, ChevronDown, ChevronUp, Copy, Check, FileText } from 'lucide-react';
+import { Paperclip, ChevronDown, ChevronUp, Copy, Check, FileText, Table2 } from 'lucide-react';
 
 interface SourceCardProps {
   source: SourceWithText;
@@ -64,6 +64,12 @@ const SourceCard: React.FC<SourceCardProps> = ({
             ) : (
               <span className="px-1.5 py-0.5 text-xs bg-gray-100 text-gray-500 rounded">
                 未引用
+              </span>
+            )}
+            {source.is_table && (
+              <span className="px-1.5 py-0.5 text-xs bg-blue-50 text-blue-700 rounded flex items-center gap-1">
+                <Table2 size={10} />
+                表格
               </span>
             )}
           </div>
@@ -162,7 +168,7 @@ export const SourcePanel: React.FC = () => {
     );
   }
 
-  if (currentChapter.status === 'skipped' || currentSources.length === 0) {
+  if (currentSources.length === 0) {
     return (
       <div className="h-full bg-gray-50 flex items-center justify-center text-gray-400">
         <div className="text-center">

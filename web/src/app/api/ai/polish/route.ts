@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { saveAIHistory, getUploadedFile } from '@/lib/db';
+import { buildPrompt } from '@/lib/prompt-loader';
 
 const LLM_BASE_URL = process.env.LLM_BASE_URL || 'http://127.0.0.1:8000';
 const LLM_API_KEY = process.env.LLM_API_KEY || 'sk-leoi-888';
@@ -8,7 +9,7 @@ const LLM_MODEL = process.env.LLM_MODEL || 'deepseek-thinking';
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
-    const { chapter_id, selected_text, source_texts, uploaded_file_ids, action } = body;
+    const { chapter_id, selected_text, source_texts, uploaded_file_ids } = body;
 
     if (!chapter_id || !selected_text) {
       return NextResponse.json({ error: 'chapter_id and selected_text are required' }, { status: 400 });
@@ -31,22 +32,12 @@ export async function POST(request: NextRequest) {
       uploadedContext = texts.join('\n\n');
     }
 
-    const prompt = `你是一位专业的 ESG 报告编辑助手。请将以下段落润色改写。
-
-要求：
-1. 保持专业、正式的语气
-2. 保留所有 [来源X] 标注，不要删除或修改
-3. 不改变原有数据和事实
-4. 参考提供的来源资料确保准确性
-
-【待润色文本】
-${selected_text}
-
-${sourceContext ? `【参考来源资料】\n${sourceContext}` : ''}
-
-${uploadedContext ? `【补充资料】\n${uploadedContext}` : ''}
-
-请直接输出润色后的文本，不要添加解释。`;
+    // Build prompt from template
+    const prompt = buildPrompt('ai_polish', {
+      selected_text,
+      source_context: sourceContext,
+      uploaded_context: uploadedContext,
+    });
 
     // Call LLM
     const llmResponse = await fetch(`${LLM_BASE_URL}/v1/chat/completions`, {

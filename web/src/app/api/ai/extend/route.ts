@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { saveAIHistory, getUploadedFile } from '@/lib/db';
+import { buildPrompt } from '@/lib/prompt-loader';
 
 const LLM_BASE_URL = process.env.LLM_BASE_URL || 'http://127.0.0.1:8000';
 const LLM_API_KEY = process.env.LLM_API_KEY || 'sk-leoi-888';
@@ -31,22 +32,12 @@ export async function POST(request: NextRequest) {
       uploadedContext = texts.join('\n\n');
     }
 
-    const prompt = `你是一位专业的 ESG 报告编辑助手。请基于以下段落进行续写扩展。
-
-要求：
-1. 保持与原文一致的专业语气和风格
-2. 基于提供的来源资料和补充资料进行有据可依的扩展
-3. 如引用来源资料中的信息，请添加 [来源X] 标注
-4. 续写内容应自然衔接原文
-
-【待续写文本】
-${selected_text}
-
-${sourceContext ? `【参考来源资料】\n${sourceContext}` : ''}
-
-${uploadedContext ? `【补充资料】\n${uploadedContext}` : ''}
-
-请直接输出续写的文本（不包含原文），不要添加解释。`;
+    // Build prompt from template
+    const prompt = buildPrompt('ai_extend', {
+      selected_text,
+      source_context: sourceContext,
+      uploaded_context: uploadedContext,
+    });
 
     // Call LLM
     const llmResponse = await fetch(`${LLM_BASE_URL}/v1/chat/completions`, {

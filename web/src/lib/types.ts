@@ -57,6 +57,18 @@ export interface DraftResults {
   results: ChapterResult[];
 }
 
+/**
+ * ChunkRecord - 文档分块记录
+ *
+ * Phase 1-3 优化后的结构（2026-03-26）：
+ * - 移除 parent_text（改为存储在 parents 映射中，减少 80% 冗余）
+ * - 移除 chunk_index（通过 chunk_id 中的类型标识区分）
+ * - 新增表格相关字段：is_table, table_summary, table_html, table_markdown, table_rows
+ *
+ * chunk_id 格式：{path}#{section_id}#{type}{index}[p{part}]
+ * - type: 'c' 表示正文内容，'t' 表示表格
+ * - 例如：A-总体概况/A3/公司介绍.pdf#s2#t0（第一个表格）
+ */
 export interface ChunkRecord {
   chunk_id: string;
   parent_id: string;
@@ -64,11 +76,16 @@ export interface ChunkRecord {
   file_name: string;
   folder_code: string;
   page_or_sheet: string;
-  chunk_index: number;
-  text: string;
-  parent_text: string;
   section_title: string;
+  text: string;
   char_count: number;
+
+  // 表格专用字段（Phase 1-2 新增）
+  is_table?: boolean;           // 是否为表格 chunk
+  table_summary?: string;       // LLM 生成的表格摘要（100-300 字）
+  table_html?: string;          // 原始 HTML 表格
+  table_markdown?: string;      // Markdown 格式表格
+  table_rows?: number;          // 表格行数
 }
 
 // Tree structure for sidebar navigation
@@ -88,6 +105,7 @@ export interface SourceWithText extends SourceMapping {
   id: string;
   text: string;
   is_cited: boolean;
+  is_table: boolean;  // Phase 1-3: 标识是否为表格来源
 }
 
 // Editor state

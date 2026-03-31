@@ -1,29 +1,53 @@
 /**
  * Content Transform Utilities
  *
- * Bidirectional conversion between raw draft content (with [来源X] and [待补充:xxx] markers)
+ * Bidirectional conversion between Markdown content (with [来源X] and [待补充:xxx] markers)
  * and Tiptap-compatible HTML.
  *
- * Source tag patterns in the data:
- *   [来源3]         — single source
- *   [来源1,4]       — comma-separated (no spaces)
- *   [来源1, 8]      — comma-separated (with spaces)
- *   [来源5-6]       — range
- *   [来源2-5, 7]    — mixed range and list
- *   [来源5,6,10]    — multi-digit IDs
+ * Data format (saved in SQLite/JSON):
+ *   - Markdown with custom markers: **bold**, *italic*, [来源1,2], [待补充:xxx]
+ *
+ * Tiptap format (rendered in editor):
+ *   - HTML with custom nodes: <strong>, <em>, <sup data-type="source-tag">, <div data-type="pending-block">
+ *
+ * Flow:
+ *   Load:  Markdown → marked → HTML → Tiptap
+ *   Save:  Tiptap → HTML → turndown → Markdown
  */
 
+import { marked } from 'marked';
+import TurndownService from 'turndown';
+
+// =============================================================================
+// Constants & Patterns
+// =============================================================================
+
+// Placeholder patterns for custom markers (used during conversion)
+const SOURCE_PLACEHOLDER_PREFIX = '\x00SOURCE:';
+const SOURCE_PLACEHOLDER_SUFFIX = '\x00';
+const PENDING_PLACEHOLDER_PREFIX = '\x00PENDING:';
+const PENDING_PLACEHOLDER_SUFFIX = '\x00';
+
+// Regex patterns
+const SOURCE_TAG_PATTERN = /\[来源([\d,，\s\-–]+)\]/g;
+const PENDING_BLOCK_PATTERN = /\[待补充[：:]([^\]]+)\]/g;
+
+// =============================================================================
+// Source Tag Helpers
+// =============================================================================
+
 /**
- * Normalize source tag inner text to a canonical comma-separated list of individual IDs.
+ * Parse source tag content into an array of individual source IDs.
+ * Handles single IDs, comma-separated lists, and ranges.
+ *
  * Examples:
- *   "3"       → "3"
- *   "1,4"     → "1,4"
- *   "1, 8"    → "1,8"
- *   "5-6"     → "5,6"
- *   "2-5, 7"  → "2,3,4,5,7"
+ *   "3"       → [3]
+ *   "1,4"     → [1, 4]
+ *   "1, 8"    → [1, 8]
+ *   "5-6"     → [5, 6]
+ *   "2-5, 7"  → [2, 3, 4, 5, 7]
  */
-function normalizeSourceIds(raw: string): string {
-  // Split by comma (possibly with spaces)
+function parseSourceIds(raw: string): number[] {
   const parts = raw.split(/[,，]/).map(s => s.trim()).filter(Boolean);
   const ids: number[] = [];
 
@@ -43,155 +67,216 @@ function normalizeSourceIds(raw: string): string {
     }
   }
 
-  return ids.join(',');
+  return ids;
 }
 
 /**
- * Convert raw content (from draft_results.json) to Tiptap-compatible HTML.
+ * Generate HTML for source tags. Each source ID becomes a separate <sup> element.
+ */
+function sourceIdsToHTML(ids: number[]): string {
+  return ids.map(id =>
+    `<sup data-type="source-tag" data-sources="${id}" class="source-tag">${id}</sup>`
+  ).join('');
+}
+
+// =============================================================================
+// Markdown → HTML (for loading into Tiptap)
+// =============================================================================
+
+/**
+ * Configure marked for our use case
+ */
+function configureMarked() {
+  // Use synchronous mode and disable features we don't need
+  marked.setOptions({
+    async: false,
+    gfm: true,        // GitHub Flavored Markdown
+    breaks: false,    // Don't convert \n to <br> (we handle paragraphs)
+  });
+}
+
+/**
+ * Convert Markdown content to Tiptap-compatible HTML.
  *
- * Transformations:
- * - [来源X] / [来源X,Y] / [来源X-Y] → <sup data-type="source-tag" ...>
- * - [待补充：xxx] → <div data-type="pending-block" ...>
- * - \n\n → paragraph boundaries
- * - \n → <br>
+ * Process:
+ * 1. Protect custom markers ([来源X], [待补充:xxx]) with placeholders
+ * 2. Convert Markdown → HTML using marked
+ * 3. Restore custom markers as Tiptap custom nodes
  */
 export function contentToTiptapHTML(content: string): string {
   if (!content) return '<p></p>';
 
-  // Escape HTML entities first
-  let text = content
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;');
+  configureMarked();
 
-  // Replace ALL [来源...] patterns — match digits, commas, hyphens, spaces inside
-  text = text.replace(
-    /\[来源([\d,，\s\-–]+)\]/g,
-    (_match, raw: string) => {
-      const normalized = normalizeSourceIds(raw);
-      if (!normalized) return _match; // fallback: leave as-is if parsing fails
-      return `<sup data-type="source-tag" data-sources="${normalized}" class="source-tag">${normalized}</sup>`;
-    }
-  );
+  let text = content;
 
-  // Replace [待补充：xxx] or [待补充:xxx] with pending block nodes
-  // These are block-level, so we close the current <p> and reopen after
-  text = text.replace(
-    /\[待补充[：:]([^\]]+)\]/g,
-    (_match, desc: string) => {
-      return `\x00PENDING_START\x00${desc}\x00PENDING_END\x00`;
-    }
-  );
+  // Step 1: Protect [来源X] markers with placeholders (before markdown parsing)
+  // Store the parsed IDs in the placeholder
+  const sourceMap = new Map<string, number[]>();
+  let sourceCounter = 0;
+  text = text.replace(SOURCE_TAG_PATTERN, (_match, raw: string) => {
+    const ids = parseSourceIds(raw);
+    if (ids.length === 0) return _match;
+    const key = `${SOURCE_PLACEHOLDER_PREFIX}${sourceCounter}${SOURCE_PLACEHOLDER_SUFFIX}`;
+    sourceMap.set(key, ids);
+    sourceCounter++;
+    return key;
+  });
 
-  // Split into paragraphs by double newline
-  const paragraphs = text.split('\n\n');
-  const htmlParts: string[] = [];
+  // Step 2: Protect [待补充:xxx] markers
+  const pendingMap = new Map<string, string>();
+  let pendingCounter = 0;
+  text = text.replace(PENDING_BLOCK_PATTERN, (_match, desc: string) => {
+    const key = `${PENDING_PLACEHOLDER_PREFIX}${pendingCounter}${PENDING_PLACEHOLDER_SUFFIX}`;
+    pendingMap.set(key, desc);
+    pendingCounter++;
+    return key;
+  });
 
-  for (const rawPara of paragraphs) {
-    const trimmed = rawPara.trim();
-    if (!trimmed) continue;
+  // Step 3: Convert Markdown to HTML
+  let html = marked.parse(text) as string;
 
-    // Check if this paragraph contains pending blocks
-    if (trimmed.includes('\x00PENDING_START\x00')) {
-      // Split around pending block markers
-      const segments = trimmed.split(/\x00PENDING_START\x00([^\x00]*)\x00PENDING_END\x00/);
-      for (let i = 0; i < segments.length; i++) {
-        const seg = segments[i].trim();
-        if (!seg) continue;
-        if (i % 2 === 1) {
-          // This is a pending block description (odd indices from the split)
-          htmlParts.push(
-            `<div data-type="pending-block" data-description="${seg}" class="pending-content">⚠️ 待补充：${seg}</div>`
-          );
-        } else {
-          // Normal text segment
-          htmlParts.push(`<p>${seg.replace(/\n/g, '<br>')}</p>`);
-        }
-      }
-    } else {
-      // Normal paragraph
-      htmlParts.push(`<p>${trimmed.replace(/\n/g, '<br>')}</p>`);
-    }
-  }
+  // Step 4: Restore source tags as custom Tiptap nodes
+  sourceMap.forEach((ids, placeholder) => {
+    html = html.replace(placeholder, sourceIdsToHTML(ids));
+  });
 
-  return htmlParts.join('') || '<p></p>';
+  // Step 5: Restore pending blocks as custom Tiptap nodes
+  pendingMap.forEach((desc, placeholder) => {
+    const pendingHTML = `<div data-type="pending-block" data-description="${escapeHTML(desc)}" class="pending-content">⚠️ 待补充：${escapeHTML(desc)}</div>`;
+    html = html.replace(placeholder, pendingHTML);
+  });
+
+  // Step 6: Clean up empty paragraphs and ensure valid HTML
+  html = html.trim();
+  if (!html) return '<p></p>';
+
+  return html;
 }
 
 /**
- * Convert Tiptap HTML back to raw content format (for saving).
+ * Convert raw text (e.g., AI response) to HTML for insertion.
+ * Handles both Markdown formatting and custom markers.
+ */
+export function textToBlockHTML(text: string): string {
+  if (!text) return '';
+  return contentToTiptapHTML(text);
+}
+
+// =============================================================================
+// HTML → Markdown (for saving from Tiptap)
+// =============================================================================
+
+/**
+ * Create and configure Turndown service for HTML → Markdown conversion
+ */
+function createTurndownService(): TurndownService {
+  const turndown = new TurndownService({
+    headingStyle: 'atx',           // # style headings
+    bulletListMarker: '-',
+    codeBlockStyle: 'fenced',
+    fence: '```',
+    emDelimiter: '*',
+    strongDelimiter: '**',
+  });
+
+  // Custom rule for source tags: convert back to [来源X] format
+  // Adjacent source tags will be merged into [来源1,2,3]
+  turndown.addRule('sourceTag', {
+    filter: (node): boolean => {
+      return node.nodeName === 'SUP' && (
+        node.getAttribute('data-type') === 'source-tag' ||
+        node.classList?.contains('source-tag') ||
+        node.hasAttribute('data-sources')
+      );
+    },
+    replacement: (_content, node): string => {
+      const element = node as HTMLElement;
+      const sourceId = element.getAttribute('data-sources') || element.textContent || '';
+      if (!sourceId || !/\d/.test(sourceId)) return '';
+      // Use a special marker that we'll merge later
+      return `§SOURCE:${sourceId}§`;
+    },
+  });
+
+  // Custom rule for pending blocks: convert back to [待补充:xxx] format
+  turndown.addRule('pendingBlock', {
+    filter: (node): boolean => {
+      return node.nodeName === 'DIV' && node.getAttribute('data-type') === 'pending-block';
+    },
+    replacement: (_content, node): string => {
+      const element = node as HTMLElement;
+      const desc = element.getAttribute('data-description') || '';
+      return `[待补充：${desc}]`;
+    },
+  });
+
+  // Keep line breaks in a sensible way
+  turndown.addRule('lineBreak', {
+    filter: 'br',
+    replacement: (): string => '\n',
+  });
+
+  return turndown;
+}
+
+/**
+ * Merge adjacent source markers into combined [来源X,Y,Z] format.
+ */
+function mergeSourceMarkers(text: string): string {
+  return text.replace(
+    /(§SOURCE:\d+§)+/g,
+    (match) => {
+      const ids = match.match(/§SOURCE:(\d+)§/g)?.map(m => {
+        const idMatch = m.match(/§SOURCE:(\d+)§/);
+        return idMatch ? idMatch[1] : '';
+      }).filter(Boolean) || [];
+
+      if (ids.length === 0) return match;
+      return `[来源${ids.join(',')}]`;
+    }
+  );
+}
+
+/**
+ * Convert Tiptap HTML back to Markdown format (for saving).
  *
- * Reverse transformations:
- * - <sup ...source-tag... data-sources="X,Y"...>...</sup> → [来源X,Y]
- * - <div ...pending-block... data-description="xxx"...>...</div> → [待补充：xxx]
- * - <p>...</p> → text + \n\n
- * - <br> → \n
- * - Strip remaining HTML tags
+ * Process:
+ * 1. Use Turndown to convert HTML → Markdown
+ * 2. Custom rules handle [来源X] and [待补充:xxx] markers
+ * 3. Merge adjacent source tags into combined format
  */
 export function tiptapHTMLToContent(html: string): string {
   if (!html) return '';
 
-  let text = html;
+  const turndown = createTurndownService();
 
-  // Replace source tags back to markers.
-  // Strategy: match any <sup> that is a source-tag (has data-type or data-sources or class="source-tag").
-  // Extract source IDs from: (1) data-sources attribute, or (2) text content.
-  // This is robust against attribute reordering and edge cases where data-sources might be empty.
-  text = text.replace(
-    /<sup[^>]*(?:data-type="source-tag"|class="source-tag"|data-sources="[^"]*")[^>]*>([^<]*)<\/sup>/g,
-    (_match, textContent: string) => {
-      // Try to extract from data-sources attribute first
-      const dsMatch = _match.match(/data-sources="([^"]*)"/);
-      const fromAttr = dsMatch ? dsMatch[1].trim() : '';
+  // Convert HTML to Markdown
+  let markdown = turndown.turndown(html);
 
-      // Fall back to text content if data-sources is empty
-      const sourceIds = fromAttr || textContent.trim();
+  // Merge adjacent source markers
+  markdown = mergeSourceMarkers(markdown);
 
-      // Validate: must contain at least one digit
-      if (!sourceIds || !/\d/.test(sourceIds)) {
-        // Cannot recover source IDs — preserve as plain text to avoid data loss
-        return textContent || '';
-      }
+  // Clean up excessive whitespace
+  markdown = markdown
+    .replace(/\n{3,}/g, '\n\n')  // Max 2 consecutive newlines
+    .trim();
 
-      return `[来源${sourceIds}]`;
-    }
-  );
+  return markdown;
+}
 
-  // Replace pending blocks back to markers — flexible attribute order
-  text = text.replace(
-    /<div[^>]*data-description="([^"]*)"[^>]*data-type="pending-block"[^>]*>[^<]*<\/div>/g,
-    (_match, desc: string) => `[待补充：${desc}]`
-  );
-  text = text.replace(
-    /<div[^>]*data-type="pending-block"[^>]*data-description="([^"]*)"[^>]*>[^<]*<\/div>/g,
-    (_match, desc: string) => `[待补充：${desc}]`
-  );
+// =============================================================================
+// Utility Functions
+// =============================================================================
 
-  // Replace <br> and <br/> with newline
-  text = text.replace(/<br\s*\/?>/g, '\n');
-
-  // Replace block-level elements with double newlines
-  text = text.replace(/<\/p>\s*<p[^>]*>/g, '\n\n');
-  text = text.replace(/<\/h[1-6]>\s*/g, '\n\n');
-  text = text.replace(/<h[1-6][^>]*>/g, '');
-  text = text.replace(/<\/blockquote>\s*/g, '\n\n');
-  text = text.replace(/<blockquote[^>]*>/g, '');
-  text = text.replace(/<\/li>\s*/g, '\n');
-  text = text.replace(/<li[^>]*>/g, '');
-  text = text.replace(/<\/?[uo]l[^>]*>/g, '\n');
-
-  // Strip remaining HTML tags
-  text = text.replace(/<[^>]+>/g, '');
-
-  // Decode HTML entities
-  text = text
-    .replace(/&amp;/g, '&')
-    .replace(/&lt;/g, '<')
-    .replace(/&gt;/g, '>')
-    .replace(/&quot;/g, '"')
-    .replace(/&#39;/g, "'");
-
-  // Clean up excessive newlines
-  text = text.replace(/\n{3,}/g, '\n\n').trim();
-
-  return text;
+/**
+ * Escape HTML special characters
+ */
+function escapeHTML(text: string): string {
+  return text
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
 }

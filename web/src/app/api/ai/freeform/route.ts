@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { saveAIHistory, getUploadedFile } from '@/lib/db';
+import { buildPrompt } from '@/lib/prompt-loader';
 
 const LLM_BASE_URL = process.env.LLM_BASE_URL || 'http://127.0.0.1:8000';
 const LLM_API_KEY = process.env.LLM_API_KEY || 'sk-leoi-888';
@@ -31,17 +32,13 @@ export async function POST(request: NextRequest) {
       uploadedContext = texts.join('\n\n');
     }
 
-    const prompt = `你是一位专业的 ESG 报告编辑助手。
-
-用户指令：${custom_prompt}
-
-${selected_text ? `【相关文本】\n${selected_text}` : ''}
-
-${sourceContext ? `【参考来源资料】\n${sourceContext}` : ''}
-
-${uploadedContext ? `【补充资料】\n${uploadedContext}` : ''}
-
-请直接按用户指令执行，不要添加多余解释。`;
+    // Build prompt from template
+    const prompt = buildPrompt('ai_freeform', {
+      custom_prompt,
+      selected_text: selected_text || '',
+      source_context: sourceContext,
+      uploaded_context: uploadedContext,
+    });
 
     // Call LLM
     const llmResponse = await fetch(`${LLM_BASE_URL}/v1/chat/completions`, {

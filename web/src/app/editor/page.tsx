@@ -26,8 +26,7 @@ export default function EditorPage() {
     async function loadData() {
       setIsLoading(true);
 
-      // Startup cleanup: purge any corrupted localStorage caches from previous sessions.
-      // This is a one-time sweep that removes caches with empty [来源] tags.
+      // Startup cleanup: purge any corrupted localStorage caches
       try {
         const keysToRemove: string[] = [];
         for (let i = 0; i < localStorage.length; i++) {
@@ -45,17 +44,15 @@ export default function EditorPage() {
           localStorage.removeItem(key);
           console.warn(`Purged corrupted localStorage cache: ${key}`);
         }
-      } catch { /* localStorage may be unavailable in some contexts */ }
+      } catch { /* localStorage may be unavailable */ }
 
       try {
-        // Load all data in parallel
         const [draftResponse, chunksResponse, editsResponse] = await Promise.all([
           fetch('/api/data/draft'),
           fetch('/api/data/chunks'),
           fetch('/api/chapters/_all'),
         ]);
 
-        // Load edits first so they're available when draft results are set
         if (editsResponse.ok) {
           const editsData = await editsResponse.json();
           if (Array.isArray(editsData)) {
@@ -82,7 +79,6 @@ export default function EditorPage() {
     loadData();
   }, [setDraftResults, setChunksCache, setChapterEdits, setIsLoading]);
 
-  // Compute dynamic stats
   const stats = draftResults ? {
     total: draftResults.summary.total,
     generated: draftResults.results.filter(r => r.status === 'generated').length,
@@ -103,30 +99,37 @@ export default function EditorPage() {
     );
   }
 
+  // 计算 AI 面板是否显示，用于调整布局
+  const isAIPanelVisible = showAIPanel && currentChapter;
+
   return (
     <div className="h-screen flex flex-col bg-gray-100">
       {/* Top Toolbar */}
       <Toolbar />
 
-      {/* Main Content */}
-      <div className="flex-1 flex overflow-hidden relative">
+      {/* Main Content - 使用 flex 布局，AI 面板出现时编辑区自动缩窄 */}
+      <div className="flex-1 flex overflow-hidden">
         {/* Left Sidebar - Directory Navigation */}
         <div className="w-64 flex-shrink-0">
           <Sidebar />
         </div>
 
-        {/* Center - Content Editor */}
-        <ContentEditor />
+        {/* Center - Content Editor (flex-1 自适应宽度) */}
+        <div className="flex-1 min-w-0 overflow-hidden">
+          <ContentEditor />
+        </div>
+
+        {/* AI Panel - 条件渲染，出现时占据固定宽度 */}
+        {isAIPanelVisible && (
+          <div className="w-[400px] flex-shrink-0 border-l border-gray-200">
+            <AIPanel />
+          </div>
+        )}
 
         {/* Right Sidebar - Source Panel */}
         <div className="w-[350px] flex-shrink-0">
           <SourcePanel />
         </div>
-
-        {/* AI Panel (floating) */}
-        {showAIPanel && currentChapter && (
-          <AIPanel />
-        )}
 
         {/* Version History (floating drawer) */}
         <VersionHistory />
