@@ -28,7 +28,7 @@ import sys
 # 将 src/ 加入 sys.path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
 
-from extractors import call_glmocr, extract_pdf, classify_pdf
+from extractors import call_glmocr, extract_pdf, classify_pdf_v2
 
 ROOT      = os.path.join(os.path.dirname(__file__), '..')
 MOCK_DATA = os.path.join(ROOT, "data/processed/模拟甲方整理后资料")
@@ -121,12 +121,12 @@ def test_ocr_scanned_pdf():
             f"请先运行 simulate_client_sorting.py 生成模拟资料目录"
         )
 
-    # 先确认 classify_pdf 判定为 scanned（独立于 OCR 服务）
+    # 先确认 classify_pdf_v2 判定为 sdk（扫描件走 SDK 路径）
     import fitz
     doc      = fitz.open(SCANNED_PDF)
-    pdf_type = classify_pdf(doc)
-    assert pdf_type == "scanned", \
-        f"预期 scanned，实际 {pdf_type}（文件：{SCANNED_PDF}）"
+    pdf_type = classify_pdf_v2(doc)
+    assert pdf_type == "sdk", \
+        f"预期 sdk，实际 {pdf_type}（文件：{SCANNED_PDF}）"
     doc.close()
 
     rel_path = os.path.relpath(SCANNED_PDF, MOCK_DATA)

@@ -258,7 +258,7 @@ class TestClassifyConsistency(unittest.TestCase):
     def test_misaligned(self):
         """folder=GA1, topk 前 3 无 GA1 → ⚠️, suggested=Top-1。"""
         topk = [("EB1", 0.9), ("EB2", 0.8), ("EB3", 0.7), ("GA1", 0.5)]
-        status, desc, suggested = classify_consistency("GA1", topk)
+        status, desc, suggested = classify_consistency("GA1", topk, topn=3)
         self.assertEqual(status, "⚠️")
         self.assertEqual(desc, "疑似错位")
         self.assertEqual(suggested, "EB1")

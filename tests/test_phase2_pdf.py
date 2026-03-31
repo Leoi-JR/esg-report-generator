@@ -15,7 +15,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
 
 # 阶段二函数现在在 extractors.py 中
 from extractors import (
-    classify_pdf,
+    classify_pdf_v2,
     extract_pdf,
     count_meaningful_chars,
     recursive_split,
@@ -116,7 +116,7 @@ def test_make_chunks_from_sections_fields():
 # ==============================================================================
 
 def test_classify_pdf_normal():
-    """正常 PDF 分类为 normal（从 G-公司治理目录找一个非扫描件 PDF）"""
+    """正常 PDF 分类为 pymupdf（从 G-公司治理目录找一个非扫描件 PDF）"""
     import fitz
 
     pdf_path = None
@@ -134,13 +134,13 @@ def test_classify_pdf_normal():
         return
 
     doc    = fitz.open(pdf_path)
-    result = classify_pdf(doc)
-    assert result in ("normal", "ppt", "scanned"), f"未知类型: {result}"
+    result = classify_pdf_v2(doc)
+    assert result in ("pymupdf", "sdk"), f"未知类型: {result}"
     print(f"  [{os.path.basename(pdf_path)}] → {result}")
 
 
 def test_classify_pdf_scanned():
-    """扫描件 PDF 分类为 scanned"""
+    """扫描件 PDF 应分类为 sdk（v2 统一将扫描件/PPT/混合 PDF 归为 sdk 路径）"""
     import fitz
     import glob
 
@@ -152,9 +152,9 @@ def test_classify_pdf_scanned():
         return
 
     doc    = fitz.open(candidates[0])
-    result = classify_pdf(doc)
-    assert result == "scanned", \
-        f"预期 scanned，实际 {result}（{candidates[0]}）"
+    result = classify_pdf_v2(doc)
+    assert result == "sdk", \
+        f"预期 sdk，实际 {result}（{candidates[0]}）"
     print(f"  [{os.path.basename(candidates[0])}] → {result} ✓")
 
 
@@ -162,7 +162,7 @@ def test_extract_pdf_chunk_structure():
     """抽取一个正常 PDF，验证 ChunkRecord 结构完整性与字段约束"""
     import fitz
 
-    # 找第一个被 classify_pdf 判定为 "normal" 的 PDF（跳过扫描件和 PPT）
+    # 找第一个被 classify_pdf_v2 判定为 "pymupdf" 的 PDF（跳过扫描件和 PPT）
     pdf_path = None
     for dirpath, _, files in os.walk(MOCK_DATA):
         for f in sorted(files):
@@ -173,7 +173,7 @@ def test_extract_pdf_chunk_structure():
             candidate = os.path.join(dirpath, f)
             try:
                 doc = fitz.open(candidate)
-                if classify_pdf(doc) == "normal":
+                if classify_pdf_v2(doc) == "pymupdf":
                     pdf_path = candidate
                     break
             except Exception:
@@ -181,7 +181,7 @@ def test_extract_pdf_chunk_structure():
         if pdf_path:
             break
 
-    assert pdf_path, "未找到 classify_pdf 返回 'normal' 的 PDF"
+    assert pdf_path, "未找到 classify_pdf_v2 返回 'pymupdf' 的 PDF"
 
     rel_path = os.path.relpath(pdf_path, MOCK_DATA)
     file_record = {
@@ -273,13 +273,13 @@ def inspect_pdf(pdf_path: str, save_dir: str = None) -> None:
 
     # 分类
     doc      = fitz.open(pdf_path)
-    pdf_type = classify_pdf(doc)
+    pdf_type = classify_pdf_v2(doc)
     out(f"类型判断：{pdf_type}  "
         f"（共 {len(doc)} 页，"
         f"页面尺寸：{doc[0].rect.width:.0f}×{doc[0].rect.height:.0f}）")
 
-    if pdf_type in ("ppt", "scanned"):
-        out(f"→ OCR 路径（调用 GLM-OCR 服务 http://localhost:8080/v1）")
+    if pdf_type == "sdk":
+        out(f"→ SDK 路径（PP-DocLayout-V3 版面检测 + GLM-OCR）")
 
     # 提取（含 OCR 类型，extract_pdf 内部会调用 call_glmocr）
     file_record = {

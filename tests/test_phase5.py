@@ -376,12 +376,17 @@ class TestPrintSummary(unittest.TestCase):
         """捕获 stdout 包含"已生成"和"需人工审查"且计数正确。"""
         statuses = ["⚠️", "🔍", "➕", "✅", "✅", "❓"]
         records = _mock_alignment_records(n=6, statuses=statuses)
+        # 构造一个最小的 file_records 列表
+        file_records = [
+            {"file_path": f"/mock/path/file{i}.pdf", "file_name": f"file{i}.pdf"}
+            for i in range(3)
+        ]
         # ⚠️ + 🔍 + ➕ = 3
 
         captured = io.StringIO()
         import contextlib
         with contextlib.redirect_stdout(captured):
-            print_phase5_summary("/tmp/test.xlsx", records)
+            print_phase5_summary("/tmp/test.xlsx", records, file_records)
 
         output = captured.getvalue()
         self.assertIn("已生成", output)

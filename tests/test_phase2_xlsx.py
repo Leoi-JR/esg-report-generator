@@ -108,15 +108,16 @@ def test_extract_xlsx_no_zero_char_count():
 
 
 def test_extract_xlsx_chunk_size_limit():
-    """所有 chunk 的 text 长度应 ≤ max_size=800。"""
+    """所有 chunk 的 text 长度应 ≤ CHUNK_MAX_SIZE（config.py 中配置）。"""
+    from config import CHUNK_MAX_SIZE
     record = _make_file_record(XLSX_COMPLEX, folder_code="SD4")
     chunks = extract_xlsx(record)
-    over = [c for c in chunks if len(c["text"]) > 800]
+    over = [c for c in chunks if len(c["text"]) > CHUNK_MAX_SIZE]
     assert over == [], (
-        f"存在 {len(over)} 个超过 800 字符的 chunk，"
+        f"存在 {len(over)} 个超过 {CHUNK_MAX_SIZE} 字符的 chunk，"
         f"最大长度：{max(len(c['text']) for c in chunks)}"
     )
-    print(f"  ✓ 所有 chunk ≤ 800 字符")
+    print(f"  ✓ 所有 chunk ≤ {CHUNK_MAX_SIZE} 字符")
 
 
 def test_extract_xlsx_chunk_id_unique():

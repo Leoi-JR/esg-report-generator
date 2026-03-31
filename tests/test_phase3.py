@@ -109,6 +109,7 @@ class TestBuildIndicatorQueries(unittest.TestCase):
         queries = build_indicator_queries(details)
         self.assertEqual(set(queries.keys()), set(details.keys()))
 
+    @patch("align_evidence.ENHANCED_QUERY_PATH", "/nonexistent/enhanced.json")
     def test_query_contains_code_topic_indicator(self):
         """每条查询文本应包含 code、topic、indicator 信息。"""
         details = _mock_indicator_details(n=3)
@@ -130,6 +131,7 @@ class TestBuildIndicatorQueries(unittest.TestCase):
             self.assertLessEqual(len(query), max_expected,
                                  f"查询文本超过预期上限，原始 requirement={len(req_full)} 字")
 
+    @patch("align_evidence.ENHANCED_QUERY_PATH", "/nonexistent/enhanced.json")
     def test_no_requirement_no_colon(self):
         """无 requirement 时，查询文本不应包含冒号占位。"""
         details = {
