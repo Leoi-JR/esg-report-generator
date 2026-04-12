@@ -65,18 +65,12 @@ export interface KnownProject {
 
 /**
  * 默认模板文件路径（新项目创建时复制到项目 raw/ 目录）。
- * checklistExcel 来自旧路径下的艾森股份定性清单，复制时重命名为标准名。
+ * 模板文件存放在仓库根目录的 templates/，已由 git 追踪，新环境 clone 后即可用。
  */
 export function getDefaultTemplatePaths() {
   return {
-    frameworkExcel: path.join(PROJECT_ROOT, 'data', 'raw', 'ESG报告框架.xlsx'),
-    checklistExcel: path.join(
-      PROJECT_ROOT,
-      'data',
-      'raw',
-      '资料收集清单-to艾森',
-      '【艾森股份】1-【定性】ESG报告资料清单.xlsx'
-    ),
+    frameworkExcel: path.join(PROJECT_ROOT, 'templates', 'ESG报告框架.xlsx'),
+    checklistExcel: path.join(PROJECT_ROOT, 'templates', '资料收集清单.xlsx'),
   };
 }
 
