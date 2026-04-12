@@ -3,6 +3,7 @@
 data/
 !web/data/
 !web/src/app/api/data/
+!web/src/app/api/pipeline/data/
 
 # ── 多企业项目数据目录（各企业的 raw/ 和 processed/，体积大） ────────────
 # 仅忽略数据文件，projects/ 目录结构本身可提交（用于记录项目约定）
