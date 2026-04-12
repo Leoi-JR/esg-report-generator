@@ -9,7 +9,8 @@ const LLM_MODEL = process.env.LLM_MODEL || 'deepseek-thinking';
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
-    const { chapter_id, selected_text, source_texts, uploaded_file_ids } = body;
+    const { chapter_id, selected_text, source_texts, uploaded_file_ids, project_id } = body;
+    const projectId = project_id || 'default';
 
     if (!chapter_id || !selected_text) {
       return NextResponse.json({ error: 'chapter_id and selected_text are required' }, { status: 400 });
@@ -64,6 +65,7 @@ export async function POST(request: NextRequest) {
 
     // Save to AI history
     const historyId = saveAIHistory({
+      project_id: projectId,
       chapter_id,
       action: 'polish',
       input_text: selected_text,

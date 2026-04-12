@@ -1,6 +1,7 @@
 'use client';
 
-import { useEffect } from 'react';
+import { Suspense, useEffect } from 'react';
+import { useSearchParams } from 'next/navigation';
 import { useEditorStore } from '@/lib/store';
 import { Toolbar } from '@/components/editor/Toolbar';
 import { Sidebar } from '@/components/editor/Sidebar';
@@ -10,17 +11,24 @@ import { VersionHistory } from '@/components/editor/VersionHistory';
 import { AIPanel } from '@/components/editor/AIPanel';
 import { Loader2 } from 'lucide-react';
 
-export default function EditorPage() {
+function EditorPageInner() {
+  const searchParams = useSearchParams();
+  const project = searchParams.get('project') || undefined;
   const {
     setDraftResults,
     setChunksCache,
     setChapterEdits,
     isLoading,
     setIsLoading,
+    setActiveProject,
     draftResults,
     showAIPanel,
     currentChapter,
   } = useEditorStore();
+
+  useEffect(() => {
+    setActiveProject(project);
+  }, [project, setActiveProject]);
 
   useEffect(() => {
     async function loadData() {
@@ -47,10 +55,11 @@ export default function EditorPage() {
       } catch { /* localStorage may be unavailable */ }
 
       try {
+        const qs = project ? `?project=${encodeURIComponent(project)}` : '';
         const [draftResponse, chunksResponse, editsResponse] = await Promise.all([
-          fetch('/api/data/draft'),
-          fetch('/api/data/chunks'),
-          fetch('/api/chapters/_all'),
+          fetch(`/api/data/draft${qs}`),
+          fetch(`/api/data/chunks${qs}`),
+          fetch(`/api/chapters/_all${qs}`),
         ]);
 
         if (editsResponse.ok) {
@@ -77,7 +86,7 @@ export default function EditorPage() {
     }
 
     loadData();
-  }, [setDraftResults, setChunksCache, setChapterEdits, setIsLoading]);
+  }, [setDraftResults, setChunksCache, setChapterEdits, setIsLoading, project]);
 
   const stats = draftResults ? {
     total: draftResults.summary.total,
@@ -90,70 +99,125 @@ export default function EditorPage() {
 
   if (isLoading) {
     return (
-      <div className="h-screen flex items-center justify-center bg-gray-50">
-        <div className="text-center">
-          <Loader2 size={48} className="animate-spin text-blue-600 mx-auto mb-4" />
-          <p className="text-gray-600">正在加载报告数据...</p>
+      <div style={{ height: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'var(--bg)' }}>
+        <div style={{ textAlign: 'center' }}>
+          <Loader2 size={36} className="animate-spin" style={{ color: 'var(--green)', margin: '0 auto 12px', display: 'block' }} />
+          <p style={{ color: 'var(--text-3)', fontSize: '13px', fontFamily: 'var(--font-body)' }}>正在加载报告数据...</p>
         </div>
       </div>
     );
   }
 
-  // 计算 AI 面板是否显示，用于调整布局
   const isAIPanelVisible = showAIPanel && currentChapter;
 
   return (
-    <div className="h-screen flex flex-col bg-gray-100">
-      {/* Top Toolbar */}
+    <div style={{ height: '100vh', display: 'flex', flexDirection: 'column', background: 'var(--bg)' }}>
+      {/* 顶部工具栏 */}
       <Toolbar />
 
-      {/* Main Content - 使用 flex 布局，AI 面板出现时编辑区自动缩窄 */}
-      <div className="flex-1 flex overflow-hidden">
-        {/* Left Sidebar - Directory Navigation */}
-        <div className="w-64 flex-shrink-0">
+      {/* 主内容区：三栏布局 */}
+      <div style={{ flex: 1, display: 'flex', overflow: 'hidden' }}>
+        {/* 左侧：章节目录 */}
+        <div style={{ width: '256px', flexShrink: 0 }}>
           <Sidebar />
         </div>
 
-        {/* Center - Content Editor (flex-1 自适应宽度) */}
-        <div className="flex-1 min-w-0 overflow-hidden">
+        {/* 中间：内容编辑器 */}
+        <div style={{ flex: 1, minWidth: 0, overflow: 'hidden' }}>
           <ContentEditor />
         </div>
 
-        {/* AI Panel - 条件渲染，出现时占据固定宽度 */}
+        {/* AI 面板（条件渲染） */}
         {isAIPanelVisible && (
-          <div className="w-[400px] flex-shrink-0 border-l border-gray-200">
+          <div style={{
+            width: '400px',
+            flexShrink: 0,
+            borderLeft: '1px solid var(--border)',
+            borderRight: '2px solid var(--border)',
+            position: 'relative',
+          }}>
+            {/* 顶部靛蓝色条，标识 AI 面板身份 */}
+            <div style={{
+              position: 'absolute',
+              top: 0, left: 0, right: 0,
+              height: '2px',
+              background: 'var(--indigo)',
+              zIndex: 1,
+            }} />
             <AIPanel />
           </div>
         )}
 
-        {/* Right Sidebar - Source Panel */}
-        <div className="w-[350px] flex-shrink-0">
+        {/* 右侧：来源面板 */}
+        <div style={{
+          width: '340px',
+          flexShrink: 0,
+          borderLeft: isAIPanelVisible ? 'none' : '1px solid var(--border)',
+        }}>
           <SourcePanel />
         </div>
 
-        {/* Version History (floating drawer) */}
+        {/* 版本历史（浮动抽屉） */}
         <VersionHistory />
       </div>
 
-      {/* Bottom Status Bar */}
-      <footer className="h-8 bg-white border-t border-gray-200 flex items-center justify-between px-4 text-xs text-gray-500">
-        <div className="flex items-center gap-4">
-          <span>📊 进度：{stats.generated}/{stats.total} 已生成</span>
-          <span>|</span>
-          <span>{stats.skipped} 跳过</span>
-          <span>|</span>
-          <span>{stats.reviewed} 已审核</span>
+      {/* 底部状态栏 — 暖色背景，无 emoji */}
+      <footer style={{
+        height: '27px',
+        background: 'var(--bg-warm)',
+        borderTop: '1px solid var(--border)',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        padding: '0 14px',
+        fontSize: '11px',
+        color: 'var(--text-4)',
+        fontFamily: 'var(--font-body)',
+        flexShrink: 0,
+      }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+          <span style={{ display: 'flex', alignItems: 'center', gap: '5px' }}>
+            <span style={{ display: 'inline-block', width: '3px', height: '10px', borderRadius: '99px', background: 'var(--green)' }} />
+            {stats.generated}/{stats.total} 已生成
+          </span>
+          {stats.skipped > 0 && (
+            <span style={{ display: 'flex', alignItems: 'center', gap: '5px' }}>
+              <span style={{ display: 'inline-block', width: '3px', height: '10px', borderRadius: '99px', background: 'var(--text-4)', opacity: 0.5 }} />
+              {stats.skipped} 跳过
+            </span>
+          )}
+          {stats.reviewed > 0 && (
+            <span style={{ display: 'flex', alignItems: 'center', gap: '5px' }}>
+              <span style={{ display: 'inline-block', width: '3px', height: '10px', borderRadius: '99px', background: 'var(--blue)' }} />
+              {stats.reviewed} 已审核
+            </span>
+          )}
           {stats.approved > 0 && (
-            <>
-              <span>|</span>
-              <span>{stats.approved} 已批准</span>
-            </>
+            <span style={{ display: 'flex', alignItems: 'center', gap: '5px' }}>
+              <span style={{ display: 'inline-block', width: '3px', height: '10px', borderRadius: '99px', background: 'var(--indigo)' }} />
+              {stats.approved} 已批准
+            </span>
           )}
         </div>
-        <div className="flex items-center gap-2">
-          <span>📝 合计 {stats.totalWords.toLocaleString()} 字</span>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '5px' }}>
+          <span>合计 {stats.totalWords.toLocaleString()} 字</span>
         </div>
       </footer>
     </div>
+  );
+}
+
+export default function EditorPage() {
+  return (
+    <Suspense fallback={
+      <div style={{ height: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'var(--bg)' }}>
+        <div style={{ textAlign: 'center' }}>
+          <Loader2 size={36} className="animate-spin" style={{ color: 'var(--green)', margin: '0 auto 12px', display: 'block' }} />
+          <p style={{ color: 'var(--text-3)', fontSize: '13px', fontFamily: 'var(--font-body)' }}>正在加载报告数据...</p>
+        </div>
+      </div>
+    }>
+      <EditorPageInner />
+    </Suspense>
   );
 }

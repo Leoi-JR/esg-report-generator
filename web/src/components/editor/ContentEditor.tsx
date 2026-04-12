@@ -1,13 +1,13 @@
 'use client';
 
-import React, { useEffect, useMemo, useCallback, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useCallback, useRef } from 'react';
 import { useEditor, EditorContent } from '@tiptap/react';
 import StarterKit from '@tiptap/starter-kit';
 import Underline from '@tiptap/extension-underline';
 import Placeholder from '@tiptap/extension-placeholder';
 import CharacterCount from '@tiptap/extension-character-count';
 import { useEditorStore } from '@/lib/store';
-import { cn, getStatusDisplay, extractPendingBlocks } from '@/lib/utils';
+import { getStatusDisplay, extractPendingBlocks } from '@/lib/utils';
 import { SourceTag } from '@/lib/tiptap/source-tag';
 import { PendingBlock } from '@/lib/tiptap/pending-block';
 import { contentToTiptapHTML, tiptapHTMLToContent } from '@/lib/tiptap/content-transform';
@@ -31,7 +31,9 @@ export const ContentEditor: React.FC = () => {
     selectedChapterId,
     setTiptapEditor,
     setSaveStatus,
+    saveStatus,
     setSelectedText,
+    activeProject,
   } = useEditorStore();
 
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -39,7 +41,6 @@ export const ContentEditor: React.FC = () => {
   const isSettingContentRef = useRef(false);
   // Track whether user has made actual edits (not just loading content)
   const hasUserEditedRef = useRef(false);
-  const [localSaveStatus, setLocalSaveStatus] = useState<'idle' | 'saving' | 'saved'>('idle');
 
   // Get the current content — this is the authoritative source from store
   // (which merges SQLite edits over draft_results.json)
@@ -202,7 +203,6 @@ export const ContentEditor: React.FC = () => {
       return;
     }
 
-    setLocalSaveStatus('saving');
     setSaveStatus('saving');
     try {
       const resp = await fetch(`/api/chapters/${selectedChapterId}`, {
@@ -211,6 +211,7 @@ export const ContentEditor: React.FC = () => {
         body: JSON.stringify({
           content,
           word_count: content.length,
+          project_id: activeProject || 'default',
         }),
       });
 
@@ -218,19 +219,16 @@ export const ContentEditor: React.FC = () => {
         lastSavedContentRef.current = content;
         // Clear localStorage backup on successful save
         localStorage.removeItem(`draft-edit-${selectedChapterId}`);
-        setLocalSaveStatus('saved');
         setSaveStatus('saved');
         setTimeout(() => {
-          setLocalSaveStatus('idle');
           setSaveStatus('idle');
         }, 2000);
       }
     } catch (error) {
       console.error('Auto-save failed:', error);
-      setLocalSaveStatus('idle');
       setSaveStatus('idle');
     }
-  }, [selectedChapterId, setSaveStatus]);
+  }, [selectedChapterId, setSaveStatus, activeProject]);
 
   // Save on blur — only if user has actually edited
   useEffect(() => {
@@ -268,36 +266,48 @@ export const ContentEditor: React.FC = () => {
 
   if (!currentChapter) {
     return (
-      <div className="flex-1 flex items-center justify-center bg-gray-50">
-        <div className="text-center text-gray-400">
-          <FileText size={48} className="mx-auto mb-4 opacity-50" />
-          <p>请从左侧选择一个章节开始编辑</p>
+      <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'var(--bg)' }}>
+        <div style={{ textAlign: 'center', color: 'var(--text-4)' }}>
+          <FileText size={48} style={{ margin: '0 auto 16px', opacity: 0.4 }} />
+          <p style={{ fontSize: '13px', fontFamily: 'var(--font-body)' }}>请从左侧选择一个章节开始编辑</p>
         </div>
       </div>
     );
   }
 
   return (
-    <div className="flex-1 flex flex-col bg-white overflow-hidden">
+    <div style={{ flex: 1, display: 'flex', flexDirection: 'column', background: 'var(--bg-card)', overflow: 'hidden' }}>
       {/* Chapter Header */}
-      <div className="flex items-center justify-between px-6 py-4 border-b border-gray-200">
-        <div className="flex-1">
-          <div className="text-sm text-gray-500 mb-1">
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px 24px', borderBottom: '1px solid var(--border)', flexShrink: 0 }}>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ fontSize: '11px', color: 'var(--text-3)', marginBottom: '4px', fontFamily: 'var(--font-body)' }}>
             {currentChapter.full_path.split(' > ').slice(0, -1).join(' > ')}
           </div>
-          <h1 className="text-xl font-semibold text-gray-900">
+          <h1 style={{ fontSize: '16px', fontWeight: 600, color: 'var(--text-1)', margin: 0, fontFamily: 'var(--font-head)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
             {currentChapter.leaf_title}
           </h1>
         </div>
         {statusDisplay && (
-          <div className={cn(
-            'flex items-center gap-2 px-3 py-1.5 rounded-full text-sm font-medium',
-            currentChapter.status === 'generated' && 'bg-green-50 text-green-700',
-            currentChapter.status === 'skipped' && 'bg-gray-100 text-gray-500',
-            currentChapter.status === 'reviewed' && 'bg-blue-50 text-blue-700',
-            currentChapter.status === 'approved' && 'bg-purple-50 text-purple-700',
-          )}>
-            <span>{statusDisplay.icon}</span>
+          <div style={{
+            display: 'flex', alignItems: 'center', gap: '6px',
+            padding: '4px 10px',
+            borderRadius: 'var(--radius)',
+            fontSize: '12px', fontWeight: 500,
+            fontFamily: 'var(--font-body)',
+            background: currentChapter.status === 'generated' ? 'var(--green-soft)' :
+                        currentChapter.status === 'skipped'   ? 'var(--bg-warm)' :
+                        currentChapter.status === 'reviewed'  ? 'var(--blue-soft)' :
+                        currentChapter.status === 'approved'  ? 'var(--indigo-soft)' : 'var(--bg-warm)',
+            color: currentChapter.status === 'generated' ? 'var(--green)' :
+                   currentChapter.status === 'skipped'   ? 'var(--text-3)' :
+                   currentChapter.status === 'reviewed'  ? 'var(--blue)' :
+                   currentChapter.status === 'approved'  ? 'var(--indigo)' : 'var(--text-3)',
+            border: `1px solid ${
+              currentChapter.status === 'generated' ? 'var(--green-mid)' :
+              currentChapter.status === 'reviewed'  ? 'var(--blue-mid)' :
+              'var(--border-light)'
+            }`,
+          }}>
             <span>{statusDisplay.label}</span>
           </div>
         )}
@@ -305,12 +315,10 @@ export const ContentEditor: React.FC = () => {
 
       {/* Skipped Notice */}
       {currentChapter.status === 'skipped' && (
-        <div className="px-6 py-3 bg-amber-50 border-b border-amber-100">
-          <div className="flex items-center gap-2 text-amber-800">
-            <AlertTriangle size={18} />
-            <span className="text-sm">
-              此章节因资料不足而跳过：{currentChapter.skip_reason}
-            </span>
+        <div style={{ padding: '8px 24px', background: 'var(--amber-soft)', borderBottom: '1px solid var(--amber-border)', flexShrink: 0 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: 'var(--amber)', fontSize: '12px', fontFamily: 'var(--font-body)' }}>
+            <AlertTriangle size={14} />
+            <span>此章节因资料不足而跳过：{currentChapter.skip_reason}</span>
           </div>
         </div>
       )}
@@ -321,37 +329,33 @@ export const ContentEditor: React.FC = () => {
       )}
 
       {/* Editor Content */}
-      <div className="flex-1 overflow-y-auto">
+      <div style={{ flex: 1, overflowY: 'auto' }}>
         {currentChapter.draft ? (
           <EditorContent editor={editor} />
         ) : (
-          <div className="px-6 py-8 text-center text-gray-400">
-            <Edit3 size={32} className="mx-auto mb-3 opacity-50" />
-            <p>此章节暂无内容</p>
-            <p className="text-sm mt-1">需要补充更多资料后重新生成</p>
+          <div style={{ padding: '32px 24px', textAlign: 'center', color: 'var(--text-4)' }}>
+            <Edit3 size={32} style={{ margin: '0 auto 12px', opacity: 0.4 }} />
+            <p style={{ fontSize: '13px', fontFamily: 'var(--font-body)', margin: '0 0 4px' }}>此章节暂无内容</p>
+            <p style={{ fontSize: '12px', fontFamily: 'var(--font-body)', margin: 0 }}>需要补充更多资料后重新生成</p>
           </div>
         )}
       </div>
 
       {/* Footer Stats */}
-      <div className="px-6 py-3 border-t border-gray-200 bg-gray-50 flex items-center justify-between text-sm text-gray-500">
-        <div className="flex items-center gap-4">
-          <span>
-            📝 {charCount} 字
-          </span>
-          <span>
-            📎 引用 {currentChapter.draft?.cited_sources?.length || 0} 个来源
-          </span>
+      <div style={{ padding: '8px 24px', borderTop: '1px solid var(--border)', background: 'var(--bg-warm)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexShrink: 0 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '16px', fontSize: '11px', color: 'var(--text-4)', fontFamily: 'var(--font-body)' }}>
+          <span>{charCount} 字</span>
+          <span>引用 {currentChapter.draft?.cited_sources?.length || 0} 个来源</span>
           {pendingBlocks.length > 0 && (
-            <span className="text-amber-600">
-              ⚠️ {pendingBlocks.length} 处待补充
+            <span style={{ color: 'var(--amber)' }}>
+              {pendingBlocks.length} 处待补充
             </span>
           )}
         </div>
-        <div className="text-xs text-gray-400">
-          {localSaveStatus === 'saving' && '保存中...'}
-          {localSaveStatus === 'saved' && '✓ 已保存'}
-          {localSaveStatus === 'idle' && `上次更新：${new Date().toLocaleString('zh-CN')}`}
+        <div style={{ fontSize: '11px', color: 'var(--text-4)', fontFamily: 'var(--font-body)' }}>
+          {saveStatus === 'saving' && <span style={{ color: 'var(--blue)' }}>保存中...</span>}
+          {saveStatus === 'saved'  && <span style={{ color: 'var(--green)' }}>✓ 已保存</span>}
+          {saveStatus === 'idle'   && <span>自动保存</span>}
         </div>
       </div>
     </div>

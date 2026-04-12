@@ -3,11 +3,12 @@ import { getVersions, revertToVersion } from '@/lib/db';
 
 // GET /api/chapters/:id/versions — Get version history
 export async function GET(
-  _request: NextRequest,
+  request: NextRequest,
   { params }: { params: { id: string } }
 ) {
   try {
-    const versions = getVersions(params.id);
+    const projectId = request.nextUrl.searchParams.get('project') || 'default';
+    const versions = getVersions(projectId, params.id);
     return NextResponse.json({ versions });
   } catch (error) {
     console.error('Failed to get versions:', error);
@@ -25,7 +26,8 @@ export async function POST(
 ) {
   try {
     const body = await request.json();
-    const { version_id } = body;
+    const { version_id, project_id } = body;
+    const projectId = project_id || 'default';
 
     if (!version_id) {
       return NextResponse.json(
@@ -34,7 +36,7 @@ export async function POST(
       );
     }
 
-    const edit = revertToVersion(params.id, version_id);
+    const edit = revertToVersion(projectId, params.id, version_id);
     if (!edit) {
       return NextResponse.json(
         { error: 'Version not found or does not belong to this chapter' },

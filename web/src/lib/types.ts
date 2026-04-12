@@ -108,14 +108,6 @@ export interface SourceWithText extends SourceMapping {
   is_table: boolean;  // Phase 1-3: 标识是否为表格来源
 }
 
-// Editor state
-export interface EditorState {
-  selectedChapterId: string | null;
-  searchQuery: string;
-  statusFilter: 'all' | 'generated' | 'skipped' | 'reviewed';
-  expandedNodes: Set<string>;
-}
-
 // ─── P1 Types ───
 
 export type EditorMode = 'edit' | 'review';

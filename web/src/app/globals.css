@@ -1,28 +1,159 @@
+@import url('https://fonts.googleapis.com/css2?family=Noto+Serif+SC:wght@400;600;700&family=Noto+Sans+SC:wght@400;500;600&family=Inter:wght@400;500;600;700&display=swap');
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
+/* ============================================================
+   Style C — 暖白务实 · CSS 变量系统
+   ============================================================ */
 :root {
-  --foreground-rgb: 0, 0, 0;
-  --background-start-rgb: 255, 255, 255;
-  --background-end-rgb: 255, 255, 255;
+  /* 主色：墨绿 */
+  --green: #2D6A4F;
+  --green-hover: #245C44;
+  --green-soft: #EAF4EE;
+  --green-mid: #C8E6D4;
+  --green-line: #95D5B2;
+
+  /* Pipeline 专属：靛蓝 */
+  --indigo: #3D3D99;
+  --indigo-hover: #30308A;
+  --indigo-soft: #EDEDF8;
+  --indigo-mid: #D5D5F0;
+  --indigo-mid-border: #BBBBD8;
+  --indigo-line: #C5C5EE;
+
+  /* 背景色（暖色调） */
+  --bg: #F7F5F0;
+  --bg-warm: #F0EDE6;
+  --bg-card: #FFFFFF;
+  --bg-sidebar: #F3F0EA;
+
+  /* 边框色（暖灰） */
+  --border: #DDD9D0;
+  --border-light: #E8E4DC;
+
+  /* 文字色（微暖调） */
+  --text-1: #1C1C1A;
+  --text-2: #3D3D39;
+  --text-3: #6B6860;
+  --text-4: #9C9890;
+
+  /* 语义色 */
+  --amber: #B45C0A;
+  --amber-soft: #FEF3E2;
+  --amber-line: #F0A44A;
+  --amber-border: #F5C897;
+  --amber-warm: #B07D2C;
+
+  --red: #9B2020;
+  --red-soft: #FDEAEA;
+  --red-line: #F5C0C0;
+  --red-soft-hover: #FADADC;
+
+  --blue: #1A5C96;
+  --blue-soft: #E8F0F8;
+  --blue-mid: #C5D9EE;
+
+  /* 圆角 */
+  --radius: 4px;
+  --radius-sm: 3px;
+
+  /* 阴影（暖调） */
+  --shadow-sm: 0 1px 3px rgba(28, 28, 26, 0.06);
+  --shadow-md: 0 3px 10px rgba(28, 28, 26, 0.08);
+
+  /* 字体 */
+  --font-head: 'Noto Serif SC', serif;
+  --font-body: 'Noto Sans SC', sans-serif;
+
+  /* 遮罩层 */
+  --overlay: rgba(28, 28, 26, 0.45);
+}
+
+/* ============================================================
+   Style D — 简洁利落 · 主题变量覆盖
+   用法：<html data-theme="crisp">
+   ============================================================ */
+[data-theme="crisp"] {
+  /* 主色：近黑（替换墨绿角色） */
+  --green:        #111827;
+  --green-hover:  #1F2937;
+  --green-soft:   #F3F4F6;
+  --green-mid:    #E5E7EB;
+  --green-line:   #D1D5DB;
+
+  /* Pipeline 专属：蓝色（替换靛蓝角色） */
+  --indigo:           #2563EB;
+  --indigo-hover:     #1D4ED8;
+  --indigo-soft:      #EFF6FF;
+  --indigo-mid:       #DBEAFE;
+  --indigo-mid-border:#BFDBFE;
+  --indigo-line:      #BFDBFE;
+
+  /* 背景色（纯白） */
+  --bg:         #F7F7F8;
+  --bg-warm:    #F3F4F6;
+  --bg-card:    #FFFFFF;
+  --bg-sidebar: #FAFAFA;
+
+  /* 边框色（冷灰） */
+  --border:       #E5E7EB;
+  --border-light: #F0F1F3;
+
+  /* 文字色（冷调） */
+  --text-1: #111827;
+  --text-2: #374151;
+  --text-3: #6B7280;
+  --text-4: #9CA3AF;
+
+  /* 信源角标蓝 */
+  --blue:     #1D4ED8;
+  --blue-soft:#EFF6FF;
+  --blue-mid: #DBEAFE;
+
+  /* 圆角（圆润） */
+  --radius:    10px;
+  --radius-sm: 8px;
+
+  /* 阴影（冷调极轻） */
+  --shadow-sm: 0 1px 2px rgba(16, 24, 40, 0.04);
+  --shadow-md: 0 4px 16px rgba(16, 24, 40, 0.08);
+
+  /* 字体（无衬线） */
+  --font-head: 'Inter', 'Noto Sans SC', sans-serif;
+  --font-body: 'Inter', 'Noto Sans SC', sans-serif;
+
+  /* 遮罩层 */
+  --overlay: rgba(0, 0, 0, 0.35);
+}
+
+/* ============================================================
+   全局基础样式
+   ============================================================ */
+html {
+  font-family: var(--font-body);
 }
 
 body {
-  color: rgb(var(--foreground-rgb));
-  background: linear-gradient(
-      to bottom,
-      transparent,
-      rgb(var(--background-end-rgb))
-    )
-    rgb(var(--background-start-rgb));
+  font-family: var(--font-body);
+  font-size: 13px;
+  color: var(--text-1);
+  background: var(--bg);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
 }
 
-/* Tiptap Editor Styles */
+/* ============================================================
+   Tiptap 编辑器样式
+   ============================================================ */
 .ProseMirror {
   min-height: 400px;
   outline: none;
-  padding: 1rem 1.5rem;
+  font-family: var(--font-body);
+  font-size: 13px;
+  line-height: 1.85;
+  color: var(--text-1);
 }
 
 .ProseMirror.ProseMirror-focused {
@@ -33,110 +164,157 @@ body {
 .ProseMirror p.is-editor-empty:first-child::before {
   content: attr(data-placeholder);
   float: left;
-  color: #adb5bd;
+  color: var(--text-4);
   pointer-events: none;
   height: 0;
+  font-size: 13px;
 }
 
 .ProseMirror p {
-  margin: 0.75em 0;
+  margin: 0.6em 0;
+  font-size: 13px;
+  line-height: 1.85;
+  color: var(--text-2);
 }
 
 .ProseMirror h1 {
-  font-size: 1.5em;
-  font-weight: bold;
-  margin: 1em 0 0.5em;
+  font-family: var(--font-head);
+  font-size: 17px;
+  font-weight: 700;
+  color: var(--text-1);
+  margin: 1.2em 0 0.5em;
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--border-light);
 }
 
 .ProseMirror h2 {
-  font-size: 1.25em;
-  font-weight: bold;
-  margin: 1em 0 0.5em;
+  font-family: var(--font-head);
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--text-1);
+  margin: 1em 0 0.4em;
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--border-light);
 }
 
 .ProseMirror h3 {
-  font-size: 1.1em;
-  font-weight: bold;
-  margin: 1em 0 0.5em;
+  font-family: var(--font-head);
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-1);
+  margin: 0.8em 0 0.3em;
 }
 
 .ProseMirror ul,
 .ProseMirror ol {
   padding-left: 1.5em;
-  margin: 0.5em 0;
+  margin: 0.4em 0;
 }
 
 .ProseMirror li {
-  margin: 0.25em 0;
+  margin: 0.2em 0;
+  font-size: 13px;
+  line-height: 1.85;
 }
 
 .ProseMirror blockquote {
-  border-left: 3px solid #d1d5db;
+  border-left: 3px solid var(--border);
   padding-left: 1em;
-  margin: 1em 0;
-  color: #6b7280;
+  margin: 0.8em 0;
+  color: var(--text-3);
+  font-style: italic;
 }
 
-/* Source Tag Styles - 角标样式 */
+/* ============================================================
+   来源角标（Source Tag）
+   ============================================================ */
 .source-tag {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  min-width: 18px;
-  height: 18px;
-  padding: 0 4px;
+  min-width: 16px;
+  height: 15px;
+  padding: 0 3px;
   margin: 0 1px;
   font-size: 10px;
   font-weight: 600;
-  color: #2563eb;
-  background-color: #dbeafe;
-  border-radius: 3px;
+  color: var(--blue);
+  background-color: var(--blue-soft);
+  border: 1px solid var(--blue-mid);
+  border-radius: var(--radius-sm);
   cursor: pointer;
-  transition: all 0.2s;
+  transition: background-color 0.15s, border-color 0.15s;
   vertical-align: super;
   line-height: 1;
+  font-family: var(--font-body);
 }
 
 .source-tag:hover {
-  background-color: #bfdbfe;
-  transform: scale(1.1);
+  background-color: var(--blue-mid);
+  border-color: var(--blue);
 }
 
-/* Pending Content Highlight - 待补充高亮块 */
+/* ============================================================
+   待补充块（Pending Content）
+   ============================================================ */
 .pending-content {
   display: block;
-  background-color: #fef3c7;
-  border-left: 4px solid #f59e0b;
-  padding: 12px 16px;
-  margin: 16px 0;
-  border-radius: 0 6px 6px 0;
-  font-size: 14px;
-  color: #92400e;
+  background-color: var(--amber-soft);
+  border-left: 3px solid var(--amber-line);
+  padding: 10px 14px;
+  margin: 14px 0;
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+  font-size: 12px;
+  color: var(--amber);
+  font-family: var(--font-body);
 }
 
-/* Source Panel Card Text - 防止文本溢出 */
+/* ============================================================
+   信源面板文本防溢出
+   ============================================================ */
 .source-card-text {
   word-break: break-all;
   overflow-wrap: anywhere;
   white-space: pre-wrap;
 }
 
-/* Scrollbar Styles */
+/* ============================================================
+   状态竖条 pip 指示器（替代 emoji）
+   ============================================================ */
+.status-pip {
+  display: inline-block;
+  width: 3px;
+  height: 12px;
+  border-radius: 99px;
+  flex-shrink: 0;
+  vertical-align: middle;
+}
+
+.pip-green  { background-color: var(--green); }
+.pip-gray   { background-color: var(--text-4); opacity: 0.5; }
+.pip-blue   { background-color: var(--blue); }
+.pip-amber  { background-color: var(--amber-line); }
+.pip-red    { background-color: var(--red); }
+.pip-indigo { background-color: var(--indigo); }
+
+/* ============================================================
+   滚动条样式（暖调）
+   ============================================================ */
 ::-webkit-scrollbar {
-  width: 8px;
-  height: 8px;
+  width: 6px;
+  height: 6px;
 }
 
 ::-webkit-scrollbar-track {
-  background: #f1f5f9;
-  border-radius: 4px;
+  background: var(--bg-warm);
+  border-radius: 99px;
 }
 
 ::-webkit-scrollbar-thumb {
-  background: #cbd5e1;
-  border-radius: 4px;
+  background: var(--border);
+  border-radius: 99px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: #94a3b8;
+  background: var(--text-4);
 }

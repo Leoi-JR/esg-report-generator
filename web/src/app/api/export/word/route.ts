@@ -24,12 +24,18 @@ interface ChapterResult {
 
 export async function POST(request: NextRequest) {
   try {
-    const { results } = await request.json() as { results: ChapterResult[] };
+    const { results, project_id } = await request.json() as { results: ChapterResult[]; project_id?: string };
+    const projectId = project_id || 'default';
+
+    // 从 projectId 推导企业名和年份
+    const lastUnderscore = projectId.lastIndexOf('_');
+    const companyName = lastUnderscore > 0 ? projectId.substring(0, lastUnderscore) : projectId;
+    const reportYear = lastUnderscore > 0 ? projectId.substring(lastUnderscore + 1) : '';
 
     // Merge with SQLite edits
     let editsMap: Map<string, { content: string; word_count: number }>;
     try {
-      const edits = getAllEdits();
+      const edits = getAllEdits(projectId);
       editsMap = new Map(edits.filter(e => e.content).map(e => [e.id, { content: e.content, word_count: e.word_count }]));
     } catch {
       editsMap = new Map();
@@ -46,7 +52,7 @@ export async function POST(request: NextRequest) {
       new Paragraph({
         children: [
           new TextRun({
-            text: '江苏艾森半导体材料股份有限公司',
+            text: companyName,
             bold: true,
             size: 48,
           }),
@@ -57,7 +63,7 @@ export async function POST(request: NextRequest) {
       new Paragraph({
         children: [
           new TextRun({
-            text: '2025年度',
+            text: `${reportYear ? reportYear + '年度' : ''}`,
             size: 36,
           }),
         ],
@@ -156,7 +162,8 @@ export async function POST(request: NextRequest) {
 
     // Return as downloadable file
     // filename 用 ASCII 兜底，filename* 用 UTF-8 编码支持中文
-    const encodedName = encodeURIComponent('艾森股份2025ESG报告.docx');
+    const exportFileName = `${companyName}${reportYear}ESG报告.docx`;
+    const encodedName = encodeURIComponent(exportFileName);
     return new NextResponse(uint8Array, {
       headers: {
         'Content-Type':

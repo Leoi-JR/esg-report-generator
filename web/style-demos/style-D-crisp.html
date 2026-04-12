@@ -1,0 +1,1267 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>方案 D — 简洁利落</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Noto+Sans+SC:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+/* ============================================================
+   CSS VARIABLES — 方案 D 简洁利落
+   ============================================================ */
+:root {
+  /* 品牌色：近黑 */
+  --brand:          #111827;
+  --brand-hover:    #1F2937;
+  --brand-soft:     #F3F4F6;
+
+  /* 强调色：蓝 */
+  --blue:           #2563EB;
+  --blue-hover:     #1D4ED8;
+  --blue-soft:      #EFF6FF;
+  --blue-mid:       #DBEAFE;
+  --blue-deep:      #1D4ED8;
+
+  /* 背景 */
+  --bg:             #FFFFFF;
+  --bg-subtle:      #F7F7F8;
+  --bg-muted:       #F9FAFB;
+
+  /* 边框 */
+  --border-light:   #F0F1F3;
+  --border:         #E5E7EB;
+  --border-subtle:  #F3F4F6;
+
+  /* 文字四级 */
+  --text-1:         #111827;
+  --text-2:         #374151;
+  --text-3:         #6B7280;
+  --text-4:         #9CA3AF;
+
+  /* 语义色 */
+  --success:        #2563EB;
+  --success-bg:     #EFF6FF;
+  --warning:        #B45309;
+  --warning-bg:     #FFFBEB;
+  --warning-line:   #F59E0B;
+  --warning-text:   #92400E;
+  --error:          #B91C1C;
+  --error-bg:       #FEF2F2;
+
+  /* 圆角 */
+  --radius-sm:      8px;
+  --radius:         10px;
+  --radius-lg:      12px;
+  --radius-xl:      14px;
+
+  /* 阴影 */
+  --shadow-card:    0 1px 2px rgba(16,24,40,0.02), 0 1px 4px rgba(16,24,40,0.03);
+  --shadow-md:      0 4px 16px rgba(16,24,40,0.08);
+
+  /* 字体 */
+  --font-body:      'Inter', 'Noto Sans SC', 'PingFang SC', sans-serif;
+}
+
+/* ============================================================
+   RESET & BASE
+   ============================================================ */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+  font-family: var(--font-body);
+  font-size: 13px;
+  color: var(--text-1);
+  background: var(--bg-subtle);
+  line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+}
+a { text-decoration: none; color: inherit; }
+
+/* ============================================================
+   DEMO WRAPPERS
+   ============================================================ */
+.demo-section {
+  margin: 0 auto 32px;
+  max-width: 1280px;
+  padding: 0 24px;
+}
+.demo-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--text-4);
+  margin-bottom: 10px;
+  font-family: var(--font-body);
+}
+.demo-label::before {
+  content: '';
+  display: inline-block;
+  width: 3px;
+  height: 12px;
+  background: var(--blue);
+  border-radius: 99px;
+}
+
+/* ============================================================
+   SECTION 1 — Homepage Header
+   ============================================================ */
+.home-header {
+  background: var(--blue);
+  padding: 28px 0;
+}
+.home-header .inner {
+  max-width: 1024px;
+  margin: 0 auto;
+  padding: 0 32px;
+}
+.home-header h1 {
+  font-size: 28px;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  color: #fff;
+  margin-bottom: 6px;
+}
+.home-header p {
+  font-size: 13px;
+  color: #DBEAFE;
+}
+
+/* ============================================================
+   SECTION 2 — Homepage Project List
+   ============================================================ */
+.home-main {
+  background: var(--bg);
+  min-height: 300px;
+}
+.home-main .inner {
+  max-width: 1024px;
+  margin: 0 auto;
+  padding: 28px 32px;
+}
+.project-row {
+  border-bottom: 1px solid var(--border-subtle);
+  padding: 20px 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+}
+.project-row:last-child { border-bottom: none; }
+.project-row__left { flex: 1; min-width: 0; }
+.project-badge-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+.badge {
+  display: inline-flex;
+  align-items: center;
+  font-size: 11px;
+  font-weight: 500;
+  padding: 2px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--bg-muted);
+  color: var(--text-2);
+}
+.badge--blue {
+  background: var(--blue-soft);
+  border-color: var(--blue-mid);
+  color: var(--blue-deep);
+}
+.badge--green {
+  background: #F0FDF4;
+  border-color: #BBF7D0;
+  color: #166534;
+}
+.project-key {
+  font-size: 11px;
+  color: var(--text-4);
+  font-family: 'SF Mono', 'Fira Code', monospace;
+}
+.project-name {
+  font-size: 22px;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  color: var(--text-1);
+  margin-bottom: 8px;
+}
+.project-meta {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  font-size: 12px;
+  color: var(--text-3);
+}
+.project-row__right {
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  flex-shrink: 0;
+}
+.project-stats {
+  text-align: right;
+  font-size: 12px;
+  color: var(--text-3);
+  line-height: 1.7;
+}
+.btn-primary {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 36px;
+  padding: 0 16px;
+  background: var(--brand);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 500;
+  border-radius: 9px;
+  border: none;
+  cursor: pointer;
+  font-family: var(--font-body);
+  transition: background 0.15s;
+  white-space: nowrap;
+}
+.btn-primary:hover { background: var(--brand-hover); }
+.btn-secondary {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 32px;
+  padding: 0 12px;
+  background: var(--bg);
+  color: var(--text-2);
+  font-size: 11px;
+  font-weight: 500;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  cursor: pointer;
+  font-family: var(--font-body);
+  transition: background 0.15s;
+}
+.btn-secondary:hover { background: var(--bg-subtle); }
+.btn-blue {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 36px;
+  padding: 0 16px;
+  background: var(--blue);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 500;
+  border-radius: 9px;
+  border: none;
+  cursor: pointer;
+  font-family: var(--font-body);
+  transition: background 0.15s;
+}
+.btn-blue:hover { background: var(--blue-hover); }
+
+</style>
+</head>
+<body>
+
+<!-- ============================================================
+     SECTION 1 — Homepage
+     ============================================================ -->
+<div class="demo-section" style="padding-top:28px">
+  <div class="demo-label">Section 1 · 首页</div>
+</div>
+
+<div style="border-radius: var(--radius-lg); overflow: hidden; max-width:1280px; margin: 0 auto 32px; box-shadow: var(--shadow-md); border: 1px solid var(--border);">
+
+  <!-- Homepage Header -->
+  <div class="home-header">
+    <div class="inner">
+      <h1>项目报告</h1>
+      <p>读取项目根目录下当前已识别的 ESG 报告项目，并进入对应编辑页面。</p>
+    </div>
+  </div>
+
+  <!-- Project List -->
+  <div class="home-main">
+    <div class="inner">
+
+      <div class="project-row">
+        <div class="project-row__left">
+          <div class="project-badge-row">
+            <span class="badge badge--green">已生成</span>
+            <span class="project-key">泓淋电力_2025</span>
+          </div>
+          <div class="project-name">泓淋电力股份有限公司</div>
+          <div class="project-meta">
+            <span>119 个章节</span>
+            <span>255 个来源文件</span>
+            <span>最近更新：2025-04-10 14:32</span>
+          </div>
+        </div>
+        <div class="project-row__right">
+          <div class="project-stats">
+            <div>已生成 112</div>
+            <div>已审核 34</div>
+          </div>
+          <button class="btn-primary">进入编辑 →</button>
+        </div>
+      </div>
+
+      <div class="project-row">
+        <div class="project-row__left">
+          <div class="project-badge-row">
+            <span class="badge badge--blue">已上传 89 个文件</span>
+            <span class="project-key">艾森股份_2025</span>
+          </div>
+          <div class="project-name">江苏艾森半导体材料股份有限公司</div>
+          <div class="project-meta">
+            <span>0 个章节</span>
+            <span>89 个来源文件</span>
+            <span>最近更新：暂无</span>
+          </div>
+        </div>
+        <div class="project-row__right">
+          <div class="project-stats">
+            <div>已生成 0</div>
+            <div>已审核 0</div>
+          </div>
+          <button class="btn-blue">运行 Pipeline →</button>
+        </div>
+      </div>
+
+      <div class="project-row">
+        <div class="project-row__left">
+          <div class="project-badge-row">
+            <span class="badge">未上传资料</span>
+            <span class="project-key">新能源_2025</span>
+          </div>
+          <div class="project-name">某新能源科技有限公司</div>
+          <div class="project-meta">
+            <span>0 个章节</span>
+            <span>0 个来源文件</span>
+            <span>最近更新：暂无</span>
+          </div>
+        </div>
+        <div class="project-row__right">
+          <div class="project-stats" style="color:var(--text-4)">
+            <div>——</div>
+          </div>
+          <button class="btn-secondary">下载模板</button>
+        </div>
+      </div>
+
+    </div>
+  </div>
+</div>
+<!-- /SECTION 1 -->
+
+<!-- ============================================================
+     SECTION 2 — Editor (Toolbar + 3-column layout)
+     ============================================================ -->
+<div class="demo-section">
+  <div class="demo-label">Section 2 · 编辑器</div>
+</div>
+
+<style>
+/* Editor layout */
+.editor-shell {
+  max-width: 1280px;
+  margin: 0 auto 32px;
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+  border: 1px solid var(--border);
+  box-shadow: var(--shadow-md);
+  background: var(--bg);
+  display: flex;
+  flex-direction: column;
+  height: 620px;
+}
+
+/* Toolbar */
+.editor-toolbar {
+  height: 48px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  border-bottom: 1px solid var(--border-light);
+  background: var(--bg);
+  padding: 0 16px;
+  gap: 12px;
+}
+.toolbar-left {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.toolbar-back {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 30px;
+  padding: 0 10px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-light);
+  background: var(--bg);
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--text-2);
+  cursor: pointer;
+  font-family: var(--font-body);
+}
+.toolbar-back:hover { background: var(--bg-subtle); }
+.toolbar-title { font-size: 13px; font-weight: 600; color: var(--text-1); }
+.toolbar-sub { font-size: 11px; color: var(--text-3); }
+.toolbar-saved { font-size: 11px; color: var(--text-3); }
+.toolbar-right {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.toolbar-icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-light);
+  background: var(--bg);
+  color: var(--text-3);
+  cursor: pointer;
+  font-size: 13px;
+}
+.toolbar-icon-btn:hover { background: var(--bg-subtle); color: var(--text-2); }
+.toolbar-divider {
+  width: 1px;
+  height: 16px;
+  background: var(--border-light);
+  margin: 0 2px;
+}
+.toolbar-btn-ghost {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 30px;
+  padding: 0 10px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-light);
+  background: var(--bg);
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--text-2);
+  cursor: pointer;
+  font-family: var(--font-body);
+}
+.toolbar-btn-ghost:hover { background: var(--bg-subtle); }
+.toolbar-btn-export {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 30px;
+  padding: 0 12px;
+  border-radius: var(--radius-sm);
+  border: none;
+  background: var(--brand);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 500;
+  cursor: pointer;
+  font-family: var(--font-body);
+}
+.toolbar-btn-export:hover { background: var(--brand-hover); }
+
+/* 3-column body */
+.editor-body {
+  flex: 1;
+  display: flex;
+  min-height: 0;
+}
+
+/* Sidebar */
+.editor-sidebar {
+  width: 224px;
+  flex-shrink: 0;
+  border-right: 1px solid var(--border-light);
+  background: var(--bg);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.sidebar-search {
+  padding: 10px 12px 8px;
+  border-bottom: 1px solid var(--border-light);
+}
+.sidebar-search-input {
+  width: 100%;
+  height: 28px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: var(--bg-subtle);
+  padding: 0 10px;
+  font-size: 12px;
+  color: var(--text-1);
+  font-family: var(--font-body);
+  outline: none;
+}
+.sidebar-filter-row {
+  display: flex;
+  gap: 4px;
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--border-light);
+}
+.filter-btn {
+  height: 22px;
+  padding: 0 8px;
+  border-radius: 999px;
+  border: 1px solid transparent;
+  background: transparent;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--text-3);
+  cursor: pointer;
+  font-family: var(--font-body);
+}
+.filter-btn.active {
+  background: var(--brand-soft);
+  color: var(--text-1);
+  border-color: var(--border);
+}
+.sidebar-tree {
+  flex: 1;
+  overflow-y: auto;
+  padding: 6px 8px;
+}
+.tree-group-label {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-4);
+  padding: 8px 8px 4px;
+}
+.tree-node {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 8px 5px 8px;
+  border-radius: var(--radius);
+  cursor: pointer;
+  font-size: 12px;
+  color: var(--text-2);
+  transition: background 0.1s;
+}
+.tree-node:hover { background: var(--bg-subtle); }
+.tree-node.selected {
+  background: var(--brand-soft);
+  color: var(--text-1);
+  font-weight: 500;
+}
+.tree-node.l1 { font-size: 13px; font-weight: 600; padding-left: 8px; }
+.tree-node.l2 { padding-left: 20px; }
+.tree-node.l3 { padding-left: 32px; font-size: 12px; }
+.tree-node-dot {
+  width: 5px; height: 5px;
+  border-radius: 50%;
+  background: var(--border);
+  flex-shrink: 0;
+}
+.tree-node.selected .tree-node-dot { background: var(--blue); }
+.tree-node-status {
+  margin-left: auto;
+  width: 6px; height: 6px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.status-done { background: #22C55E; }
+.status-review { background: var(--blue); }
+.status-skip { background: var(--border); }
+
+/* Content area */
+.editor-content {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  border-right: 1px solid var(--border-light);
+  overflow: hidden;
+}
+.content-header {
+  padding: 14px 24px 10px;
+  border-bottom: 1px solid var(--border-light);
+  flex-shrink: 0;
+}
+.content-chapter-id {
+  font-size: 11px;
+  color: var(--blue-deep);
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  margin-bottom: 3px;
+}
+.content-chapter-title {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--text-1);
+  letter-spacing: -0.01em;
+}
+.content-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 20px 28px;
+  font-size: 14px;
+  line-height: 1.78;
+  color: var(--text-2);
+}
+.content-body p { margin-bottom: 10px; }
+.content-body h2 {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text-1);
+  margin: 18px 0 8px;
+}
+.source-tag {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  margin: 0 1px;
+  font-size: 9px;
+  font-weight: 600;
+  color: var(--blue-deep);
+  background: #E8F0FF;
+  border-radius: 5px;
+  cursor: pointer;
+  vertical-align: super;
+  line-height: 1;
+  transition: all 0.15s;
+}
+.source-tag:hover { background: #CFE0FF; transform: translateY(-1px); }
+.pending-block {
+  background: var(--warning-bg);
+  border-left: 4px solid var(--warning-line);
+  border-radius: 0 var(--radius) var(--radius) 0;
+  padding: 10px 14px;
+  margin: 14px 0;
+  font-size: 13px;
+  color: var(--warning-text);
+}
+
+/* Source panel */
+.editor-sources {
+  width: 280px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg);
+  overflow: hidden;
+}
+.sources-header {
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--border-light);
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-3);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+.sources-list { flex: 1; overflow-y: auto; padding: 8px; }
+.source-card {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 10px 12px;
+  margin-bottom: 6px;
+  cursor: pointer;
+  transition: border-color 0.15s, box-shadow 0.15s;
+  background: var(--bg);
+}
+.source-card:hover {
+  border-color: var(--blue-mid);
+  box-shadow: 0 0 0 3px var(--blue-soft);
+}
+.source-card.active {
+  border-color: var(--blue);
+  box-shadow: 0 0 0 3px var(--blue-soft);
+}
+.source-card-num {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px; height: 18px;
+  border-radius: 5px;
+  background: #E8F0FF;
+  color: var(--blue-deep);
+  font-size: 9px;
+  font-weight: 700;
+  margin-bottom: 5px;
+}
+.source-card-file {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-1);
+  margin-bottom: 3px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.source-card-score {
+  font-size: 10px;
+  color: var(--text-4);
+  margin-bottom: 5px;
+}
+.source-card-text {
+  font-size: 11px;
+  color: var(--text-3);
+  line-height: 1.6;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+</style>
+
+<div class="editor-shell">
+  <!-- Toolbar -->
+  <div class="editor-toolbar">
+    <div class="toolbar-left">
+      <button class="toolbar-back">← 项目首页</button>
+      <div>
+        <div class="toolbar-title">泓淋电力股份有限公司</div>
+        <div class="toolbar-sub">泓淋电力_2025 · 专业内容生产工作台</div>
+      </div>
+      <div class="toolbar-saved" style="color:var(--success); margin-left:6px;">已保存</div>
+    </div>
+    <div class="toolbar-right">
+      <button class="toolbar-icon-btn" title="撤销">↩</button>
+      <button class="toolbar-icon-btn" title="重做">↪</button>
+      <div class="toolbar-divider"></div>
+      <button class="toolbar-btn-ghost">✦ AI 助手</button>
+      <button class="toolbar-btn-ghost">⏱ 版本历史</button>
+      <button class="toolbar-btn-ghost">保存</button>
+      <button class="toolbar-btn-export">↓ 导出 ∨</button>
+    </div>
+  </div>
+
+  <!-- 3-column body -->
+  <div class="editor-body">
+    <!-- Sidebar -->
+    <div class="editor-sidebar">
+      <div class="sidebar-search">
+        <input class="sidebar-search-input" type="text" placeholder="搜索章节...">
+      </div>
+      <div class="sidebar-filter-row">
+        <button class="filter-btn active">全部</button>
+        <button class="filter-btn">待审核</button>
+        <button class="filter-btn">已审核</button>
+      </div>
+      <div class="sidebar-tree">
+        <div class="tree-group-label">E 环境保护</div>
+        <div class="tree-node l1">EA 应对气候变化</div>
+        <div class="tree-node l2">EA1 能源消耗
+          <span class="tree-node-status status-review"></span>
+        </div>
+        <div class="tree-node l2 selected">EA2 温室气体排放
+          <span class="tree-node-status status-review"></span>
+        </div>
+        <div class="tree-node l2">EA3 气候风险管理
+          <span class="tree-node-status status-done"></span>
+        </div>
+        <div class="tree-node l1">EB 环境管理</div>
+        <div class="tree-node l2">EB1 环境管理体系
+          <span class="tree-node-status status-done"></span>
+        </div>
+        <div class="tree-node l2">EB3 废水管理
+          <span class="tree-node-status status-skip"></span>
+        </div>
+        <div class="tree-group-label">G 公司治理</div>
+        <div class="tree-node l1">GA 可持续发展治理</div>
+        <div class="tree-node l2">GA1 治理架构
+          <span class="tree-node-status status-done"></span>
+        </div>
+        <div class="tree-node l2">GA2 ESG 管理框架
+          <span class="tree-node-status status-review"></span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Content -->
+    <div class="editor-content">
+      <div class="content-header">
+        <div class="content-chapter-id">EA2</div>
+        <div class="content-chapter-title">温室气体排放</div>
+      </div>
+      <div class="content-body">
+        <p>2025 年度，公司积极推进温室气体排放核算与管理工作，建立了覆盖范围一（直接排放）和范围二（购入电力间接排放）的排放数据统计体系。<span class="source-tag">1</span></p>
+        <h2>排放数据</h2>
+        <p>报告期内，公司范围一温室气体直接排放量为 <strong>1,234.5 吨 CO₂e</strong>，较上年度下降 8.2%。范围二间接排放量为 <strong>5,678.9 吨 CO₂e</strong>，主要来源于生产设施用电。<span class="source-tag">2</span><span class="source-tag">3</span></p>
+        <p>公司通过推广绿色电力证书采购、优化生产工艺、提升能源利用效率等举措，持续降低碳排放强度。<span class="source-tag">2</span></p>
+        <div class="pending-block">⚠ [待补充：请提供 2024 年基准数据及同比计算依据，建议补充排放因子来源说明]</div>
+        <h2>减排措施</h2>
+        <p>公司制定了 2025—2030 年碳减排路径规划，设定了阶段性减排目标，并通过内部碳定价机制引导各部门节能降碳。<span class="source-tag">4</span></p>
+      </div>
+    </div>
+
+    <!-- Sources -->
+    <div class="editor-sources">
+      <div class="sources-header">引用信源 · 4 条</div>
+      <div class="sources-list">
+        <div class="source-card active">
+          <div class="source-card-num">1</div>
+          <div class="source-card-file">2025年环境管理报告.pdf</div>
+          <div class="source-card-score">相关度 0.924 · 第 12 页</div>
+          <div class="source-card-text">公司建立了 GHG Protocol 框架下的温室气体核算体系，覆盖主要生产设施及办公场所，采用 IPCC 第六次评估报告提供的排放因子...</div>
+        </div>
+        <div class="source-card">
+          <div class="source-card-num">2</div>
+          <div class="source-card-file">能源消耗统计表_2025Q4.xlsx</div>
+          <div class="source-card-score">相关度 0.871 · Sheet2</div>
+          <div class="source-card-text">各厂区用电量汇总：华东基地 2,341 万度，西南基地 1,892 万度，研发中心 445 万度，合计折算 CO₂e...</div>
+        </div>
+        <div class="source-card">
+          <div class="source-card-num">3</div>
+          <div class="source-card-file">碳排放核查报告_第三方.pdf</div>
+          <div class="source-card-score">相关度 0.803 · 第 5 页</div>
+          <div class="source-card-text">第三方核查机构确认，本报告核查边界与企业申报边界一致，核查差异率低于 5%，符合 ISO 14064-3 要求...</div>
+        </div>
+        <div class="source-card">
+          <div class="source-card-num">4</div>
+          <div class="source-card-file">ESG战略规划2025-2030.docx</div>
+          <div class="source-card-score">相关度 0.756 · 第 22 页</div>
+          <div class="source-card-text">碳中和路径：2027 年实现范围一排放较 2023 年基准下降 30%，2030 年实现范围二 100% 可再生能源替代...</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+<!-- /SECTION 2 -->
+
+<!-- ============================================================
+     SECTION 3 — Pipeline Dashboard
+     ============================================================ -->
+<div class="demo-section">
+  <div class="demo-label">Section 3 · Pipeline Dashboard</div>
+</div>
+
+<style>
+/* Pipeline layout */
+.pipeline-shell {
+  max-width: 1280px;
+  margin: 0 auto 32px;
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+  border: 1px solid var(--border);
+  box-shadow: var(--shadow-md);
+  background: var(--bg);
+}
+.pipeline-header {
+  height: 48px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  border-bottom: 1px solid var(--border-light);
+  padding: 0 20px;
+  background: var(--bg);
+}
+.pipeline-header-left {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.pipeline-logo {
+  width: 22px; height: 22px;
+  border: 2px solid var(--brand);
+  border-radius: 6px;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 11px; font-weight: 700; color: var(--brand);
+}
+.pipeline-header-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-1);
+}
+.pipeline-header-nav {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.pipeline-nav-link {
+  height: 28px;
+  padding: 0 10px;
+  border-radius: var(--radius-sm);
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-3);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  transition: background 0.1s;
+  border: none;
+  background: none;
+  font-family: var(--font-body);
+}
+.pipeline-nav-link:hover { background: var(--bg-subtle); color: var(--text-1); }
+.pipeline-nav-link.active {
+  background: var(--brand-soft);
+  color: var(--text-1);
+}
+
+/* Pipeline body: left controls + right timeline */
+.pipeline-body {
+  display: grid;
+  grid-template-columns: 300px 1fr;
+  gap: 0;
+  min-height: 500px;
+}
+.pipeline-controls {
+  border-right: 1px solid var(--border-light);
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.controls-card {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: 14px 16px;
+  background: var(--bg);
+}
+.controls-card-title {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-3);
+  margin-bottom: 12px;
+}
+.step-checkbox-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 0;
+  cursor: pointer;
+}
+.step-checkbox {
+  width: 15px; height: 15px;
+  border-radius: 4px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  display: flex; align-items: center; justify-content: center;
+  flex-shrink: 0;
+}
+.step-checkbox.checked {
+  background: var(--brand);
+  border-color: var(--brand);
+  color: #fff;
+  font-size: 9px;
+}
+.step-checkbox-label {
+  font-size: 12px;
+  color: var(--text-2);
+}
+.step-checkbox-sub {
+  font-size: 10px;
+  color: var(--text-4);
+  margin-left: auto;
+}
+.run-btn {
+  width: 100%;
+  height: 38px;
+  border-radius: var(--radius);
+  border: none;
+  background: var(--brand);
+  color: #fff;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  font-family: var(--font-body);
+  transition: background 0.15s;
+  margin-top: 4px;
+}
+.run-btn:hover { background: var(--brand-hover); }
+
+/* Timeline */
+.pipeline-timeline {
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.run-overview-card {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: 14px 16px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.run-id-label {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-3);
+  margin-bottom: 3px;
+}
+.run-id-val {
+  font-size: 11px;
+  color: var(--text-4);
+  font-family: 'SF Mono', monospace;
+}
+.status-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 10px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 500;
+  border: 1px solid transparent;
+}
+.pill-running { background: var(--blue-soft); color: var(--blue-deep); border-color: var(--blue-mid); }
+.pill-done    { background: #F0FDF4; color: #166534; border-color: #BBF7D0; }
+.pill-failed  { background: var(--error-bg); color: var(--error); border-color: #FECACA; }
+.pill-dot {
+  width: 6px; height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+/* Step timeline */
+.step-timeline-card {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+}
+.step-row {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--border-light);
+  position: relative;
+}
+.step-row:last-child { border-bottom: none; }
+.step-row.active { background: #F8FBFF; }
+.step-icon {
+  width: 28px; height: 28px;
+  border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 11px;
+  font-weight: 700;
+  flex-shrink: 0;
+}
+.icon-done    { background: #DCFCE7; color: #166534; }
+.icon-running { background: var(--blue-soft); color: var(--blue-deep); }
+.icon-pending { background: var(--bg-muted); color: var(--text-4); border: 1px solid var(--border); }
+.step-content { flex: 1; min-width: 0; }
+.step-name { font-size: 13px; font-weight: 600; color: var(--text-1); margin-bottom: 3px; }
+.step-stages {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 5px;
+}
+.stage-pill {
+  height: 18px;
+  padding: 0 7px;
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 500;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.stage-done    { background: #F0FDF4; color: #166534; border: 1px solid #BBF7D0; }
+.stage-running { background: var(--blue-soft); color: var(--blue-deep); border: 1px solid var(--blue-mid); }
+.stage-pending { background: var(--bg-muted); color: var(--text-4); border: 1px solid var(--border); }
+.stage-spinner {
+  width: 8px; height: 8px;
+  border: 1.5px solid currentColor;
+  border-top-color: transparent;
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+  display: inline-block;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+.step-time { font-size: 11px; color: var(--text-4); white-space: nowrap; }
+
+/* Progress bar */
+.progress-card {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: 14px 16px;
+}
+.progress-label-row {
+  display: flex;
+  justify-content: space-between;
+  font-size: 12px;
+  color: var(--text-2);
+  margin-bottom: 8px;
+  font-weight: 500;
+}
+.progress-bar-bg {
+  height: 6px;
+  background: var(--bg-subtle);
+  border-radius: 999px;
+  overflow: hidden;
+}
+.progress-bar-fill {
+  height: 100%;
+  background: var(--blue);
+  border-radius: 999px;
+  transition: width 0.3s;
+}
+.progress-sub {
+  font-size: 11px;
+  color: var(--text-4);
+  margin-top: 6px;
+}
+</style>
+
+<div class="pipeline-shell">
+  <!-- Pipeline Header -->
+  <div class="pipeline-header">
+    <div class="pipeline-header-left">
+      <div class="pipeline-logo">E</div>
+      <div class="pipeline-header-title">ESG 报告编辑平台</div>
+      <span style="color:var(--border-light);margin:0 6px">|</span>
+      <span style="font-size:12px;color:var(--text-3)">泓淋电力_2025</span>
+    </div>
+    <div class="pipeline-header-nav">
+      <button class="pipeline-nav-link active">Pipeline</button>
+      <button class="pipeline-nav-link">分块浏览</button>
+      <button class="pipeline-nav-link">段落浏览</button>
+      <button class="pipeline-nav-link">检索结果</button>
+    </div>
+    <div style="display:flex;gap:8px;">
+      <button class="btn-secondary" style="font-size:11px;">首页</button>
+      <button class="btn-secondary" style="font-size:11px;">编辑器</button>
+    </div>
+  </div>
+
+  <!-- Body -->
+  <div class="pipeline-body">
+    <!-- Controls -->
+    <div class="pipeline-controls">
+      <div class="controls-card">
+        <div class="controls-card-title">选择步骤</div>
+        <div class="step-checkbox-row">
+          <div class="step-checkbox">✓</div>
+          <div class="step-checkbox-label">Step 1 资料分析</div>
+        </div>
+        <div class="step-checkbox-row">
+          <div class="step-checkbox checked">✓</div>
+          <div class="step-checkbox-label">Step 2 查询生成</div>
+        </div>
+        <div class="step-checkbox-row">
+          <div class="step-checkbox checked">✓</div>
+          <div class="step-checkbox-label">Step 3 检索</div>
+        </div>
+        <div class="step-checkbox-row">
+          <div class="step-checkbox checked">✓</div>
+          <div class="step-checkbox-label">Step 4 初稿生成</div>
+        </div>
+        <button class="run-btn">▶ 运行选中步骤</button>
+      </div>
+
+      <div class="controls-card">
+        <div class="controls-card-title">运行历史</div>
+        <div style="font-size:12px;color:var(--text-2);padding:4px 0;border-bottom:1px solid var(--border-light);margin-bottom:6px;display:flex;justify-content:space-between;">
+          <span>run-78083a4f</span>
+          <span class="status-pill pill-done" style="padding:1px 7px;font-size:10px;">完成</span>
+        </div>
+        <div style="font-size:12px;color:var(--text-2);padding:4px 0;display:flex;justify-content:space-between;">
+          <span>run-4a2c1f8e</span>
+          <span class="status-pill pill-failed" style="padding:1px 7px;font-size:10px;">失败</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Timeline -->
+    <div class="pipeline-timeline">
+      <!-- Run overview -->
+      <div class="run-overview-card">
+        <div>
+          <div class="run-id-label">当前运行</div>
+          <div class="run-id-val">run-78083a4f-b6c6-4987-ac36</div>
+        </div>
+        <div style="display:flex;align-items:center;gap:10px;">
+          <span class="status-pill pill-running">
+            <span class="stage-spinner"></span>运行中
+          </span>
+          <button class="btn-secondary" style="font-size:11px;color:var(--error);border-color:#FECACA;">取消</button>
+        </div>
+      </div>
+
+      <!-- Step timeline -->
+      <div class="step-timeline-card">
+        <div class="step-row">
+          <div class="step-icon icon-done">✓</div>
+          <div class="step-content">
+            <div class="step-name">Step 1 · 资料分析</div>
+            <div class="step-stages">
+              <span class="stage-pill stage-done">Text extraction</span>
+              <span class="stage-pill stage-done">Chunking</span>
+              <span class="stage-pill stage-done">Build embeddings</span>
+              <span class="stage-pill stage-done">Semantic search</span>
+            </div>
+          </div>
+          <div class="step-time">3m 42s</div>
+        </div>
+        <div class="step-row">
+          <div class="step-icon icon-done">✓</div>
+          <div class="step-content">
+            <div class="step-name">Step 2 · 查询生成</div>
+            <div class="step-stages">
+              <span class="stage-pill stage-done">Base queries</span>
+              <span class="stage-pill stage-done">HyDE docs</span>
+              <span class="stage-pill stage-done">Validate</span>
+            </div>
+          </div>
+          <div class="step-time">8m 15s</div>
+        </div>
+        <div class="step-row active">
+          <div class="step-icon icon-running"><span class="stage-spinner"></span></div>
+          <div class="step-content">
+            <div class="step-name" style="color:var(--blue-deep);">Step 3 · 检索 <span style="font-size:11px;font-weight:400;color:var(--text-3);">进行中</span></div>
+            <div class="step-stages">
+              <span class="stage-pill stage-done">Dual embedding</span>
+              <span class="stage-pill stage-done">BM25 scoring</span>
+              <span class="stage-pill stage-done">RRF fusion</span>
+              <span class="stage-pill stage-running"><span class="stage-spinner"></span>Reranker 71/119</span>
+            </div>
+          </div>
+          <div class="step-time" style="color:var(--blue-deep);">—</div>
+        </div>
+        <div class="step-row" style="opacity:0.5">
+          <div class="step-icon icon-pending">4</div>
+          <div class="step-content">
+            <div class="step-name">Step 4 · 初稿生成</div>
+          </div>
+          <div class="step-time">—</div>
+        </div>
+      </div>
+
+      <!-- Progress bar -->
+      <div class="progress-card">
+        <div class="progress-label-row">
+          <span>Step 3 · Reranker</span>
+          <span>71 / 119 &nbsp; 59.7%</span>
+        </div>
+        <div class="progress-bar-bg">
+          <div class="progress-bar-fill" style="width:59.7%"></div>
+        </div>
+        <div class="progress-sub">已完成 71 个章节精排，预计剩余 2 分钟</div>
+      </div>
+    </div>
+  </div>
+</div>
+<!-- /SECTION 3 -->
+
+</body>
+</html>

@@ -3,7 +3,7 @@
 import React, { useState } from 'react';
 import { useEditorStore } from '@/lib/store';
 import { SourceWithText } from '@/lib/types';
-import { cn, formatScore, truncateText } from '@/lib/utils';
+import { formatScore, truncateText } from '@/lib/utils';
 import { Paperclip, ChevronDown, ChevronUp, Copy, Check, FileText, Table2 } from 'lucide-react';
 
 interface SourceCardProps {
@@ -34,113 +34,160 @@ const SourceCard: React.FC<SourceCardProps> = ({
 
   const displayText = isExpanded ? source.text : truncateText(source.text, 150);
 
+  // 竖条颜色：已引用=墨绿，高亮=墨绿加深，未引用=暖灰
+  const leftBarColor = source.is_cited
+    ? (isHighlighted ? 'var(--green-hover)' : 'var(--green)')
+    : 'var(--border)';
+
   return (
     <div
       id={`source-${source.id}`}
-      className={cn(
-        'bg-white rounded-lg border transition-all duration-200',
-        isHighlighted ? 'border-blue-400 ring-2 ring-blue-100' : 'border-gray-200',
-        source.is_cited ? 'border-l-4 border-l-green-500' : 'border-l-4 border-l-gray-300'
-      )}
+      style={{
+        background: 'var(--bg-card)',
+        border: '1px solid var(--border-light)',
+        borderLeft: `3px solid ${leftBarColor}`,
+        borderRadius: 'var(--radius)',
+        opacity: source.is_cited ? 1 : 0.82,
+        boxShadow: isHighlighted ? '0 0 0 2px var(--green-mid)' : 'none',
+        transition: 'opacity 0.15s, border-left-color 0.15s',
+      }}
+      onMouseEnter={e => { if (!source.is_cited) (e.currentTarget as HTMLDivElement).style.opacity = '1'; }}
+      onMouseLeave={e => { if (!source.is_cited) (e.currentTarget as HTMLDivElement).style.opacity = '0.82'; }}
     >
       {/* Header */}
-      <div className="px-3 py-2 border-b border-gray-100">
-        <div className="flex items-center justify-between mb-1">
-          <div className="flex items-center gap-2">
+      <div style={{ padding: '8px 10px 6px', borderBottom: '1px solid var(--border-light)' }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '4px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
             {showCheckbox && (
               <input
                 type="checkbox"
                 checked={isSelected}
                 onChange={onToggleSelect}
-                className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
                 title="选择作为 AI 上下文"
+                style={{ accentColor: 'var(--green)' }}
               />
             )}
-            <span className="text-sm font-medium text-gray-700">[{source.id}]</span>
+            <span style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text-2)', fontFamily: 'var(--font-body)' }}>
+              [{source.id}]
+            </span>
+            {/* 引用状态徽章 */}
             {source.is_cited ? (
-              <span className="px-1.5 py-0.5 text-xs bg-green-50 text-green-700 rounded">
-                ✓ 被引用
+              <span style={{
+                padding: '1px 6px', fontSize: '10px', fontWeight: 500,
+                background: 'var(--green-soft)', color: 'var(--green)',
+                border: '1px solid var(--green-mid)',
+                borderRadius: 'var(--radius-sm)',
+                display: 'inline-flex', alignItems: 'center', gap: '3px',
+              }}>
+                <span style={{ display: 'inline-block', width: '3px', height: '8px', borderRadius: '99px', background: 'var(--green)' }} />
+                已引用
               </span>
             ) : (
-              <span className="px-1.5 py-0.5 text-xs bg-gray-100 text-gray-500 rounded">
+              <span style={{
+                padding: '1px 6px', fontSize: '10px', fontWeight: 500,
+                background: 'var(--bg-warm)', color: 'var(--text-3)',
+                border: '1px solid var(--border)',
+                borderRadius: 'var(--radius-sm)',
+              }}>
                 未引用
               </span>
             )}
             {source.is_table && (
-              <span className="px-1.5 py-0.5 text-xs bg-blue-50 text-blue-700 rounded flex items-center gap-1">
-                <Table2 size={10} />
+              <span style={{
+                padding: '1px 6px', fontSize: '10px', fontWeight: 500,
+                background: 'var(--blue-soft)', color: 'var(--blue)',
+                border: '1px solid var(--blue-mid)',
+                borderRadius: 'var(--radius-sm)',
+                display: 'inline-flex', alignItems: 'center', gap: '3px',
+              }}>
+                <Table2 size={9} />
                 表格
               </span>
             )}
           </div>
         </div>
-        <div className="text-xs text-gray-600 truncate" title={source.file_name}>
+
+        {/* 文件名 */}
+        <div style={{ fontSize: '11px', color: 'var(--text-3)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', marginBottom: '4px' }} title={source.file_name}>
           {source.file_name}
         </div>
-        <div className="flex items-center gap-3 mt-1 text-xs text-gray-500">
-          <span className="flex items-center gap-1">
-            <FileText size={12} />
+
+        {/* 页码 + 相关度 */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: '10px', fontSize: '11px', color: 'var(--text-4)' }}>
+          <span style={{ display: 'flex', alignItems: 'center', gap: '3px' }}>
+            <FileText size={11} />
             第 {source.page} 页
           </span>
-          <div className="flex items-center gap-2 flex-1">
+          <div style={{ display: 'flex', alignItems: 'center', gap: '5px', flex: 1 }}>
             <span>相关度</span>
-            <div className="flex-1 max-w-[80px] h-1.5 bg-gray-200 rounded-full overflow-hidden">
-              <div
-                className={cn(
-                  'h-full rounded-full transition-all',
-                  source.score >= 0.3 ? 'bg-green-500' :
-                    source.score >= 0.1 ? 'bg-amber-500' : 'bg-red-400'
-                )}
-                style={{ width: `${width}%` }}
-              />
+            <div style={{ flex: 1, maxWidth: '64px', height: '3px', background: 'var(--border)', borderRadius: '99px', overflow: 'hidden' }}>
+              <div style={{
+                height: '100%',
+                borderRadius: '99px',
+                background: source.is_cited ? 'var(--green)' : 'var(--text-4)',
+                width: `${width}%`,
+              }} />
             </div>
-            <span className="text-gray-600 min-w-[32px]">{percentage}</span>
+            <span style={{ color: 'var(--text-3)', minWidth: '28px' }}>{percentage}</span>
           </div>
         </div>
       </div>
 
-      {/* Content */}
-      <div className="px-3 py-2 overflow-hidden">
-        <p className="text-sm text-gray-700 leading-relaxed break-all whitespace-pre-wrap overflow-wrap-anywhere">
+      {/* 正文 */}
+      <div style={{ padding: '7px 10px', overflow: 'hidden' }}>
+        <p style={{
+          fontSize: '12px', color: 'var(--text-2)',
+          lineHeight: 1.7,
+          wordBreak: 'break-all',
+          whiteSpace: 'pre-wrap',
+          overflowWrap: 'anywhere',
+          margin: 0,
+          fontFamily: 'var(--font-body)',
+        }}>
           {displayText}
         </p>
       </div>
 
-      {/* Actions */}
-      <div className="px-3 py-2 border-t border-gray-100 flex items-center justify-end gap-2">
+      {/* 操作栏 */}
+      <div style={{
+        padding: '5px 10px',
+        borderTop: '1px solid var(--border-light)',
+        display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: '4px',
+      }}>
         {source.text.length > 150 && (
           <button
             onClick={() => setIsExpanded(!isExpanded)}
-            className="flex items-center gap-1 px-2 py-1 text-xs text-gray-600 hover:text-blue-600 hover:bg-blue-50 rounded transition-colors"
+            style={{
+              display: 'flex', alignItems: 'center', gap: '3px',
+              padding: '3px 8px', fontSize: '11px',
+              color: 'var(--text-3)', background: 'none', border: 'none',
+              borderRadius: 'var(--radius-sm)', cursor: 'pointer',
+              fontFamily: 'var(--font-body)',
+              transition: 'background 0.15s, color 0.15s',
+            }}
+            onMouseEnter={e => { e.currentTarget.style.background = 'var(--bg-warm)'; e.currentTarget.style.color = 'var(--text-1)'; }}
+            onMouseLeave={e => { e.currentTarget.style.background = 'none'; e.currentTarget.style.color = 'var(--text-3)'; }}
           >
-            {isExpanded ? (
-              <>
-                <ChevronUp size={14} />
-                收起
-              </>
-            ) : (
-              <>
-                <ChevronDown size={14} />
-                展开
-              </>
-            )}
+            {isExpanded ? <><ChevronUp size={12} />收起</> : <><ChevronDown size={12} />展开</>}
           </button>
         )}
         <button
           onClick={handleCopy}
-          className="flex items-center gap-1 px-2 py-1 text-xs text-gray-600 hover:text-blue-600 hover:bg-blue-50 rounded transition-colors"
+          style={{
+            display: 'flex', alignItems: 'center', gap: '3px',
+            padding: '3px 8px', fontSize: '11px',
+            color: 'var(--text-3)', background: 'none', border: 'none',
+            borderRadius: 'var(--radius-sm)', cursor: 'pointer',
+            fontFamily: 'var(--font-body)',
+            transition: 'background 0.15s, color 0.15s',
+          }}
+          onMouseEnter={e => { e.currentTarget.style.background = 'var(--bg-warm)'; e.currentTarget.style.color = 'var(--text-1)'; }}
+          onMouseLeave={e => { e.currentTarget.style.background = 'none'; e.currentTarget.style.color = 'var(--text-3)'; }}
         >
-          {isCopied ? (
-            <>
-              <Check size={14} className="text-green-500" />
-              已复制
-            </>
-          ) : (
-            <>
-              <Copy size={14} />
-              复制
-            </>
-          )}
+          {isCopied
+            ? <><Check size={12} style={{ color: 'var(--green)' }} />已复制</>
+            : <><Copy size={12} />复制</>
+          }
         </button>
       </div>
     </div>
@@ -159,10 +206,13 @@ export const SourcePanel: React.FC = () => {
 
   if (!currentChapter) {
     return (
-      <div className="h-full bg-gray-50 flex items-center justify-center text-gray-400">
-        <div className="text-center">
-          <Paperclip size={32} className="mx-auto mb-2 opacity-50" />
-          <p className="text-sm">选择章节查看来源资料</p>
+      <div style={{ height: '100%', background: 'var(--bg-sidebar)', display: 'flex', flexDirection: 'column', position: 'relative' }}>
+        <div style={{ position: 'absolute', top: 0, left: 0, right: 0, height: '2px', background: 'var(--green)', zIndex: 1 }} />
+        <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--text-4)' }}>
+          <div style={{ textAlign: 'center' }}>
+            <Paperclip size={28} style={{ margin: '0 auto 8px', display: 'block', opacity: 0.4 }} />
+            <p style={{ fontSize: '12px', fontFamily: 'var(--font-body)' }}>选择章节查看来源资料</p>
+          </div>
         </div>
       </div>
     );
@@ -170,30 +220,54 @@ export const SourcePanel: React.FC = () => {
 
   if (currentSources.length === 0) {
     return (
-      <div className="h-full bg-gray-50 flex items-center justify-center text-gray-400">
-        <div className="text-center">
-          <Paperclip size={32} className="mx-auto mb-2 opacity-50" />
-          <p className="text-sm">此章节暂无来源资料</p>
+      <div style={{ height: '100%', background: 'var(--bg-sidebar)', display: 'flex', flexDirection: 'column', position: 'relative' }}>
+        <div style={{ position: 'absolute', top: 0, left: 0, right: 0, height: '2px', background: 'var(--green)', zIndex: 1 }} />
+        <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--text-4)' }}>
+          <div style={{ textAlign: 'center' }}>
+            <Paperclip size={28} style={{ margin: '0 auto 8px', display: 'block', opacity: 0.4 }} />
+            <p style={{ fontSize: '12px', fontFamily: 'var(--font-body)' }}>此章节暂无来源资料</p>
+          </div>
         </div>
       </div>
     );
   }
 
   return (
-    <div className="h-full flex flex-col bg-gray-50">
+    <div style={{ height: '100%', display: 'flex', flexDirection: 'column', background: 'var(--bg-sidebar)', position: 'relative' }}>
+      {/* 顶部墨绿色条，与 AI 面板的靛蓝色条对应 */}
+      <div style={{
+        position: 'absolute',
+        top: 0, left: 0, right: 0,
+        height: '2px',
+        background: 'var(--green)',
+        zIndex: 1,
+        flexShrink: 0,
+      }} />
       {/* Header */}
-      <div className="px-4 py-3 bg-white border-b border-gray-200">
-        <div className="flex items-center gap-2">
-          <Paperclip size={18} className="text-gray-500" />
-          <h3 className="font-medium text-gray-700">来源资料</h3>
-          <span className="px-2 py-0.5 text-xs bg-gray-100 text-gray-600 rounded-full">
-            {currentSources.length}
-          </span>
-        </div>
+      <div style={{
+        height: '40px',
+        padding: '0 12px',
+        background: 'var(--bg-warm)',
+        borderBottom: '1px solid var(--border)',
+        display: 'flex', alignItems: 'center', gap: '6px',
+        flexShrink: 0,
+        boxSizing: 'border-box',
+      }}>
+        <Paperclip size={14} style={{ color: 'var(--green)' }} />
+        <span style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text-1)', fontFamily: 'var(--font-head)' }}>来源资料</span>
+        <span style={{
+          padding: '1px 7px', fontSize: '10px', fontWeight: 500,
+          background: 'var(--bg-warm)', color: 'var(--text-3)',
+          border: '1px solid var(--border)',
+          borderRadius: 'var(--radius-sm)',
+          fontFamily: 'var(--font-body)',
+        }}>
+          {currentSources.length}
+        </span>
       </div>
 
-      {/* Source List */}
-      <div className="flex-1 overflow-y-auto p-3 space-y-3">
+      {/* 来源列表 */}
+      <div style={{ flex: 1, overflowY: 'auto', padding: '10px 10px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
         {currentSources.map(source => (
           <SourceCard
             key={source.id}

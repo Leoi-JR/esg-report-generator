@@ -8,7 +8,8 @@ export async function PATCH(
 ) {
   try {
     const body = await request.json();
-    const { status } = body;
+    const { status, project_id } = body;
+    const projectId = project_id || 'default';
 
     const validStatuses = ['generated', 'reviewed', 'approved'];
     if (!validStatuses.includes(status)) {
@@ -18,7 +19,7 @@ export async function PATCH(
       );
     }
 
-    updateChapterStatus(params.id, status);
+    updateChapterStatus(projectId, params.id, status);
 
     return NextResponse.json({
       success: true,

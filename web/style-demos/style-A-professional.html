@@ -1,0 +1,1141 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>方案 A — 商务沉稳</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=LXGW+WenKai:wght@300;400;700&family=Noto+Sans+SC:wght@300;400;500;600&display=swap" rel="stylesheet">
+<style>
+/* ============================================================
+   CSS VARIABLES — 方案 A 商务沉稳
+   ============================================================ */
+:root {
+  --navy:          #1E3A5F;
+  --navy-light:    #2B5080;
+  --navy-muted:    #E8EEF5;
+  --blue-accent:   #2E6DB4;
+  --blue-light:    #D6E4F5;
+  --bg-page:       #F0F4F8;
+  --bg-card:       #FFFFFF;
+  --bg-sidebar:    #FFFFFF;
+  --border:        #D9E2EC;
+  --border-light:  #EBF1F7;
+  --text-primary:  #1A2733;
+  --text-secondary:#4A6278;
+  --text-muted:    #7A94A8;
+  --text-inverse:  #FFFFFF;
+  --green:         #1A7A4A;
+  --green-bg:      #E6F4ED;
+  --amber:         #B45C0A;
+  --amber-bg:      #FEF0E0;
+  --red:           #B91C1C;
+  --red-bg:        #FEE2E2;
+  --indigo:        #3730A3;
+  --indigo-bg:     #E0E7FF;
+  --radius:        6px;
+  --radius-sm:     4px;
+  --radius-lg:     8px;
+  --shadow-sm:     0 1px 3px rgba(30,58,95,0.08);
+  --shadow-md:     0 4px 12px rgba(30,58,95,0.10);
+  --header-h:      56px;
+  --font-heading:  'LXGW WenKai', 'Noto Sans SC', sans-serif;
+  --font-body:     'Noto Sans SC', sans-serif;
+}
+
+/* ============================================================
+   RESET & BASE
+   ============================================================ */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+html { font-size: 14px; }
+body {
+  font-family: var(--font-body);
+  font-size: 13px;
+  color: var(--text-primary);
+  background: var(--bg-page);
+  line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+}
+a { text-decoration: none; color: inherit; }
+
+/* ============================================================
+   DEMO LAYOUT — section wrappers
+   ============================================================ */
+.demo-section {
+  margin: 32px auto;
+  max-width: 1280px;
+  padding: 0 24px;
+}
+.demo-label {
+  display: inline-block;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  background: var(--border-light);
+  border: 1px solid var(--border);
+  padding: 3px 10px;
+  border-radius: 99px;
+  margin-bottom: 12px;
+}
+.demo-frame {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+  box-shadow: var(--shadow-md);
+}
+
+/* ============================================================
+   SHARED HEADER  (首页 / Pipeline 通用)
+   ============================================================ */
+.app-header {
+  height: var(--header-h);
+  background: var(--bg-card);
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 24px;
+  flex-shrink: 0;
+}
+.app-header-brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.app-header-logo {
+  width: 28px; height: 28px;
+  background: var(--navy);
+  border-radius: var(--radius-sm);
+  display: flex; align-items: center; justify-content: center;
+}
+.app-header-logo svg { width: 16px; height: 16px; fill: none; stroke: #fff; stroke-width: 2; }
+.app-header-title {
+  font-family: var(--font-heading);
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--navy);
+  letter-spacing: 0.02em;
+}
+.app-header-nav {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.app-header-nav a, .app-header-nav button {
+  display: flex; align-items: center; gap: 5px;
+  font-size: 12px; font-weight: 500;
+  color: var(--text-secondary);
+  padding: 5px 10px;
+  border-radius: var(--radius-sm);
+  border: none; background: none; cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+.app-header-nav a:hover, .app-header-nav button:hover {
+  background: var(--navy-muted);
+  color: var(--navy);
+}
+.app-header-nav a.active {
+  background: var(--navy-muted);
+  color: var(--navy);
+  font-weight: 600;
+}
+.app-header-nav .nav-divider {
+  width: 1px; height: 16px;
+  background: var(--border);
+  margin: 0 4px;
+}
+.nav-icon { width: 14px; height: 14px; stroke: currentColor; fill: none; stroke-width: 2; }
+
+/* Primary button */
+.btn-primary {
+  display: inline-flex; align-items: center; gap: 6px;
+  background: var(--navy);
+  color: var(--text-inverse);
+  border: none; border-radius: var(--radius);
+  font-size: 12px; font-weight: 500;
+  font-family: var(--font-body);
+  padding: 6px 14px; cursor: pointer;
+  transition: background 0.15s;
+}
+.btn-primary:hover { background: var(--navy-light); }
+.btn-primary svg { width: 13px; height: 13px; stroke: #fff; fill: none; stroke-width: 2; }
+
+/* Ghost button */
+.btn-ghost {
+  display: inline-flex; align-items: center; gap: 6px;
+  background: transparent;
+  color: var(--text-secondary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  font-size: 12px; font-weight: 500;
+  font-family: var(--font-body);
+  padding: 5px 12px; cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+}
+.btn-ghost:hover { background: var(--bg-page); border-color: var(--text-muted); }
+.btn-ghost svg { width: 13px; height: 13px; stroke: currentColor; fill: none; stroke-width: 2; }
+
+/* ============================================================
+   STATUS BADGES
+   ============================================================ */
+.badge {
+  display: inline-flex; align-items: center; gap: 5px;
+  font-size: 11px; font-weight: 500;
+  padding: 2px 9px;
+  border-radius: 99px;
+}
+.badge-dot {
+  width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0;
+}
+.badge-green  { background: var(--green-bg);  color: var(--green);  }
+.badge-green  .badge-dot { background: var(--green); }
+.badge-amber  { background: var(--amber-bg);  color: var(--amber);  }
+.badge-amber  .badge-dot { background: var(--amber); }
+.badge-blue   { background: var(--blue-light); color: var(--blue-accent); }
+.badge-blue   .badge-dot { background: var(--blue-accent); }
+.badge-gray   { background: var(--border-light); color: var(--text-muted); }
+.badge-gray   .badge-dot { background: var(--text-muted); }
+.badge-indigo { background: var(--indigo-bg); color: var(--indigo); }
+.badge-indigo .badge-dot { background: var(--indigo); }
+.badge-red    { background: var(--red-bg);    color: var(--red);    }
+.badge-red    .badge-dot { background: var(--red); }
+
+/* ============================================================
+   SECTION 1 — HOMEPAGE
+   ============================================================ */
+.home-main {
+  max-width: 900px;
+  margin: 0 auto;
+  padding: 28px 24px 32px;
+}
+.home-page-title {
+  font-family: var(--font-heading);
+  font-size: 17px;
+  font-weight: 700;
+  color: var(--text-primary);
+  margin-bottom: 16px;
+}
+.project-card {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: 20px 22px;
+  margin-bottom: 12px;
+  box-shadow: var(--shadow-sm);
+  transition: box-shadow 0.2s;
+}
+.project-card:hover { box-shadow: var(--shadow-md); }
+.project-card-top {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+.project-card-info { flex: 1; min-width: 0; }
+.project-card-heading {
+  display: flex; align-items: center; gap: 8px;
+  margin-bottom: 4px;
+}
+.project-card-name {
+  font-family: var(--font-heading);
+  font-size: 15px; font-weight: 700;
+  color: var(--text-primary);
+}
+.project-card-desc {
+  font-size: 12px; color: var(--text-secondary);
+  margin-bottom: 10px;
+}
+.project-card-meta {
+  display: flex; align-items: center; gap: 16px;
+  font-size: 11px; color: var(--text-muted);
+}
+.project-card-meta-item {
+  display: flex; align-items: center; gap: 4px;
+}
+.project-card-meta-item svg {
+  width: 12px; height: 12px;
+  stroke: currentColor; fill: none; stroke-width: 2;
+}
+.project-card-actions {
+  display: flex; flex-direction: column; gap: 6px;
+  flex-shrink: 0;
+}
+.project-card-actions .btn-danger {
+  display: inline-flex; align-items: center; gap: 6px;
+  background: transparent;
+  color: var(--red);
+  border: 1px solid #FECACA;
+  border-radius: var(--radius);
+  font-size: 12px; font-weight: 500;
+  font-family: var(--font-body);
+  padding: 5px 12px; cursor: pointer;
+  transition: background 0.15s;
+}
+.project-card-actions .btn-danger:hover { background: var(--red-bg); }
+.project-card-actions .btn-danger svg { width: 12px; height: 12px; stroke: currentColor; fill: none; stroke-width: 2; }
+
+/* Progress bar */
+.progress-wrap { margin-top: 14px; }
+.progress-head {
+  display: flex; justify-content: space-between;
+  font-size: 11px; color: var(--text-secondary);
+  margin-bottom: 5px;
+}
+.progress-track {
+  height: 4px;
+  background: var(--border);
+  border-radius: 99px;
+  overflow: hidden;
+}
+.progress-fill {
+  height: 100%;
+  background: linear-gradient(90deg, var(--blue-accent), var(--navy));
+  border-radius: 99px;
+  transition: width 0.4s ease;
+}
+.progress-legend {
+  display: flex; gap: 14px;
+  margin-top: 6px; font-size: 11px; color: var(--text-muted);
+}
+.progress-legend-item {
+  display: flex; align-items: center; gap: 4px;
+}
+.progress-legend-dot {
+  width: 6px; height: 6px; border-radius: 50%;
+}
+
+/* empty state */
+.empty-state {
+  text-align: center;
+  padding: 56px 24px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-sm);
+}
+.empty-icon {
+  width: 40px; height: 40px;
+  stroke: var(--border); fill: none; stroke-width: 1.5;
+  margin: 0 auto 12px;
+}
+.empty-title { font-size: 13px; color: var(--text-secondary); margin-bottom: 4px; }
+.empty-desc  { font-size: 12px; color: var(--text-muted); }
+</style>
+</head>
+<body>
+
+<!-- ============================================================
+     SECTION 1: 首页 Header
+     ============================================================ -->
+<div class="demo-section">
+  <div class="demo-label">Section 1 · 导航栏（首页）</div>
+  <div class="demo-frame">
+    <header class="app-header">
+      <div class="app-header-brand">
+        <div class="app-header-logo">
+          <svg viewBox="0 0 16 16"><path d="M2 4h12M2 8h8M2 12h10" stroke-linecap="round"/></svg>
+        </div>
+        <span class="app-header-title">ESG 报告编辑平台</span>
+      </div>
+      <nav class="app-header-nav">
+        <a href="#" class="active">
+          <svg class="nav-icon" viewBox="0 0 16 16"><path d="M1 6l7-5 7 5v8a1 1 0 01-1 1H2a1 1 0 01-1-1V6z"/></svg>
+          首页
+        </a>
+        <div class="nav-divider"></div>
+        <button class="btn-primary" style="margin-left:4px;">
+          <svg viewBox="0 0 16 16"><path d="M8 2v12M2 8h12" stroke-linecap="round"/></svg>
+          新建项目
+        </button>
+      </nav>
+    </header>
+  </div>
+</div>
+
+<!-- ============================================================
+     SECTION 2: 首页项目列表
+     ============================================================ -->
+<div class="demo-section">
+  <div class="demo-label">Section 2 · 首页 · 项目列表</div>
+  <div class="demo-frame">
+    <header class="app-header">
+      <div class="app-header-brand">
+        <div class="app-header-logo">
+          <svg viewBox="0 0 16 16"><path d="M2 4h12M2 8h8M2 12h10" stroke-linecap="round"/></svg>
+        </div>
+        <span class="app-header-title">ESG 报告编辑平台</span>
+      </div>
+      <nav class="app-header-nav">
+        <a href="#" class="active">
+          <svg class="nav-icon" viewBox="0 0 16 16"><path d="M1 6l7-5 7 5v8a1 1 0 01-1 1H2a1 1 0 01-1-1V6z"/></svg>
+          首页
+        </a>
+        <div class="nav-divider"></div>
+        <button class="btn-primary" style="margin-left:4px;">
+          <svg viewBox="0 0 16 16"><path d="M8 2v12M2 8h12" stroke-linecap="round"/></svg>
+          新建项目
+        </button>
+      </nav>
+    </header>
+
+    <div class="home-main" style="background: var(--bg-page);">
+      <div class="home-page-title">项目列表</div>
+
+      <!-- Project Card 1: 已生成初稿 -->
+      <div class="project-card">
+        <div class="project-card-top">
+          <div class="project-card-info">
+            <div class="project-card-heading">
+              <span class="project-card-name">艾森股份 2025 ESG 报告</span>
+              <span class="badge badge-green"><span class="badge-dot"></span>已生成初稿</span>
+            </div>
+            <p class="project-card-desc">江苏艾森半导体材料股份有限公司 · 2025 年度 ESG 报告</p>
+            <div class="project-card-meta">
+              <span class="project-card-meta-item">
+                <svg viewBox="0 0 16 16"><rect x="2" y="3" width="12" height="10" rx="1"/><path d="M5 3V1M11 3V1M2 7h12"/></svg>
+                生成于 2026-03-22
+              </span>
+              <span class="project-card-meta-item">
+                <svg viewBox="0 0 16 16"><path d="M8 2a6 6 0 100 12A6 6 0 008 2z"/><path d="M8 5v4l3 1.5"/></svg>
+                119 个章节
+              </span>
+            </div>
+          </div>
+          <div class="project-card-actions">
+            <button class="btn-primary">
+              <svg viewBox="0 0 16 16"><path d="M2 8h10M9 5l3 3-3 3" stroke-linecap="round" stroke-linejoin="round"/></svg>
+              进入编辑
+            </button>
+            <button class="btn-ghost">
+              <svg viewBox="0 0 16 16"><circle cx="8" cy="8" r="2"/><path d="M8 1v2M8 13v2M1 8h2M13 8h2"/></svg>
+              Pipeline
+            </button>
+            <button class="btn-ghost">
+              <svg viewBox="0 0 16 16"><path d="M2 3h12v3l-3 5v3H5v-3L2 6V3z"/></svg>
+              重新上传
+            </button>
+            <button class="project-card-actions btn-danger">
+              <svg viewBox="0 0 16 16"><path d="M3 4h10M5 4V2h6v2M6 7v5M10 7v5" stroke-linecap="round"/></svg>
+              删除项目
+            </button>
+          </div>
+        </div>
+        <div class="progress-wrap">
+          <div class="progress-head">
+            <span>初稿完成进度</span>
+            <span style="font-weight:600;color:var(--text-primary)">87%</span>
+          </div>
+          <div class="progress-track">
+            <div class="progress-fill" style="width:87%"></div>
+          </div>
+          <div class="progress-legend">
+            <span class="progress-legend-item">
+              <span class="progress-legend-dot" style="background:var(--blue-accent)"></span>
+              103 已生成
+            </span>
+            <span class="progress-legend-item">
+              <span class="progress-legend-dot" style="background:var(--border)"></span>
+              12 已跳过
+            </span>
+            <span class="progress-legend-item">
+              <span class="progress-legend-dot" style="background:var(--red)"></span>
+              4 错误
+            </span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Project Card 2: 已上传资料 -->
+      <div class="project-card">
+        <div class="project-card-top">
+          <div class="project-card-info">
+            <div class="project-card-heading">
+              <span class="project-card-name">泓淋电力 2025 ESG 报告</span>
+              <span class="badge badge-blue"><span class="badge-dot"></span>已上传 48 个文件</span>
+            </div>
+            <p class="project-card-desc">泓淋电力股份有限公司 · 2025 年度 ESG 报告</p>
+            <div class="project-card-meta">
+              <span class="project-card-meta-item">
+                <svg viewBox="0 0 16 16"><path d="M3 2h10a1 1 0 011 1v10a1 1 0 01-1 1H3a1 1 0 01-1-1V3a1 1 0 011-1z"/><path d="M5 7h6M5 10h4"/></svg>
+                48 个资料文件
+              </span>
+            </div>
+          </div>
+          <div class="project-card-actions">
+            <button class="btn-primary" style="background:var(--indigo); ">
+              <svg viewBox="0 0 16 16"><circle cx="8" cy="8" r="2"/><path d="M8 1v2M8 13v2M1 8h2M13 8h2"/></svg>
+              运行 Pipeline
+            </button>
+            <button class="btn-ghost">
+              <svg viewBox="0 0 16 16"><path d="M2 3h12v3l-3 5v3H5v-3L2 6V3z"/></svg>
+              重新上传
+            </button>
+            <button class="project-card-actions btn-danger">
+              <svg viewBox="0 0 16 16"><path d="M3 4h10M5 4V2h6v2M6 7v5M10 7v5" stroke-linecap="round"/></svg>
+              删除项目
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Project Card 3: 未上传 -->
+      <div class="project-card">
+        <div class="project-card-top">
+          <div class="project-card-info">
+            <div class="project-card-heading">
+              <span class="project-card-name">新材料科技 2025 ESG 报告</span>
+              <span class="badge badge-amber"><span class="badge-dot"></span>未上传资料</span>
+            </div>
+            <p class="project-card-desc">新材料科技股份有限公司 · 2025 年度 ESG 报告</p>
+          </div>
+          <div class="project-card-actions">
+            <button class="btn-ghost">
+              <svg viewBox="0 0 16 16"><path d="M8 11V5M5 8l3-3 3 3" stroke-linecap="round"/><path d="M2 13h12"/></svg>
+              下载模板
+            </button>
+            <button class="btn-primary">
+              <svg viewBox="0 0 16 16"><path d="M8 5v6M5 8l3 3 3-3" stroke-linecap="round"/><path d="M2 13h12"/></svg>
+              上传资料
+            </button>
+            <button class="project-card-actions btn-danger">
+              <svg viewBox="0 0 16 16"><path d="M3 4h10M5 4V2h6v2M6 7v5M10 7v5" stroke-linecap="round"/></svg>
+              删除项目
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+
+<!-- ============================================================
+     SECTION 3: 编辑器页面
+     ============================================================ -->
+<div class="demo-section">
+  <div class="demo-label">Section 3 · 编辑器页面</div>
+  <div class="demo-frame">
+
+    <!-- Editor Toolbar -->
+    <header class="app-header" style="border-bottom:1px solid var(--border);">
+      <div class="app-header-brand" style="gap:6px;">
+        <a href="#" style="display:flex;align-items:center;gap:4px;font-size:11px;font-weight:500;color:var(--text-muted);padding:4px 8px;border-radius:var(--radius-sm);border:1px solid var(--border-light);background:var(--bg-page);white-space:nowrap;transition:background 0.15s;" onmouseover="this.style.background='var(--navy-muted)'" onmouseout="this.style.background='var(--bg-page)'">
+          <svg style="width:11px;height:11px;stroke:currentColor;fill:none;stroke-width:2;" viewBox="0 0 16 16"><path d="M10 12l-4-4 4-4"/></svg>
+          首页
+        </a>
+        <div class="app-header-logo">
+          <svg viewBox="0 0 16 16"><path d="M2 4h12M2 8h8M2 12h10" stroke-linecap="round"/></svg>
+        </div>
+        <span class="app-header-title">艾森股份 2025 ESG 报告</span>
+        <a href="#" style="display:flex;align-items:center;gap:4px;font-size:11px;font-weight:500;color:var(--indigo);padding:4px 8px;border-radius:var(--radius-sm);background:var(--indigo-bg);white-space:nowrap;">
+          <svg style="width:11px;height:11px;stroke:currentColor;fill:none;stroke-width:2;" viewBox="0 0 16 16"><circle cx="8" cy="8" r="2"/><path d="M8 1v2M8 13v2M1 8h2M13 8h2"/></svg>
+          Pipeline
+        </a>
+        <span style="font-size:11px;color:var(--text-muted);padding:3px 8px;background:var(--bg-page);border-radius:99px;border:1px solid var(--border-light);">自动保存</span>
+      </div>
+      <nav class="app-header-nav">
+        <!-- Undo/Redo -->
+        <button class="btn-ghost" style="padding:5px 8px;">
+          <svg viewBox="0 0 16 16" style="width:14px;height:14px;stroke:currentColor;fill:none;stroke-width:2;"><path d="M3 7a5 5 0 1 1 .5 4" stroke-linecap="round"/><path d="M3 3v4h4" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </button>
+        <button class="btn-ghost" style="padding:5px 8px;margin-right:6px;">
+          <svg viewBox="0 0 16 16" style="width:14px;height:14px;stroke:currentColor;fill:none;stroke-width:2;"><path d="M13 7a5 5 0 1 0-.5 4" stroke-linecap="round"/><path d="M13 3v4H9" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </button>
+        <button class="btn-ghost" style="color:var(--indigo);border-color:var(--indigo-bg);background:var(--indigo-bg);">
+          <svg viewBox="0 0 16 16" style="width:13px;height:13px;stroke:currentColor;fill:none;stroke-width:2;"><path d="M12 2l1 1-8 8-2 1 1-2 8-8z"/></svg>
+          AI 助手
+        </button>
+        <button class="btn-ghost">
+          <svg viewBox="0 0 16 16" style="width:13px;height:13px;stroke:currentColor;fill:none;stroke-width:2;"><circle cx="8" cy="8" r="6"/><path d="M8 5v3l2 2"/></svg>
+          版本历史
+        </button>
+        <button class="btn-ghost">
+          <svg viewBox="0 0 16 16" style="width:13px;height:13px;stroke:currentColor;fill:none;stroke-width:2;"><path d="M2 9l4 4 8-8"/></svg>
+          保存
+        </button>
+        <button class="btn-primary">
+          <svg viewBox="0 0 16 16"><path d="M8 11V3M5 8l3 3 3-3" stroke-linecap="round"/><path d="M2 13h12"/></svg>
+          导出
+          <svg viewBox="0 0 16 16" style="width:11px;height:11px;"><path d="M4 6l4 4 4-4" stroke="currentColor" fill="none" stroke-width="2"/></svg>
+        </button>
+      </nav>
+    </header>
+
+    <!-- Editor Body: 3-column -->
+    <div style="display:flex;height:560px;overflow:hidden;background:var(--bg-page);">
+
+      <!-- LEFT SIDEBAR -->
+      <div style="width:220px;flex-shrink:0;background:var(--bg-sidebar);border-right:1px solid var(--border);display:flex;flex-direction:column;overflow:hidden;">
+        <!-- Search -->
+        <div style="padding:10px 10px 8px;border-bottom:1px solid var(--border-light);">
+          <div style="position:relative;">
+            <svg style="position:absolute;left:8px;top:50%;transform:translateY(-50%);width:12px;height:12px;stroke:var(--text-muted);fill:none;stroke-width:2;" viewBox="0 0 16 16"><circle cx="7" cy="7" r="5"/><path d="M12 12l2 2"/></svg>
+            <input type="text" placeholder="搜索章节…" style="width:100%;padding:5px 8px 5px 26px;font-size:12px;font-family:var(--font-body);border:1px solid var(--border);border-radius:var(--radius-sm);color:var(--text-primary);background:var(--bg-page);outline:none;" readonly>
+          </div>
+        </div>
+        <!-- Filter Pills -->
+        <div style="padding:6px 10px 6px;border-bottom:1px solid var(--border-light);display:flex;gap:4px;">
+          <button style="font-size:11px;padding:2px 8px;border-radius:99px;border:none;cursor:pointer;background:var(--navy);color:#fff;font-family:var(--font-body);">全部</button>
+          <button style="font-size:11px;padding:2px 8px;border-radius:99px;border:none;cursor:pointer;background:var(--bg-page);color:var(--text-secondary);font-family:var(--font-body);">待审核</button>
+          <button style="font-size:11px;padding:2px 8px;border-radius:99px;border:none;cursor:pointer;background:var(--bg-page);color:var(--text-secondary);font-family:var(--font-body);">已跳过</button>
+        </div>
+        <!-- Tree -->
+        <div style="flex:1;overflow-y:auto;padding:6px 6px;">
+          <!-- G 治理 -->
+          <div style="display:flex;align-items:center;gap:4px;padding:5px 6px;border-radius:var(--radius-sm);cursor:pointer;margin-bottom:1px;" onmouseover="this.style.background='var(--bg-page)'" onmouseout="this.style.background='transparent'">
+            <svg style="width:12px;height:12px;stroke:var(--text-muted);fill:none;stroke-width:2;flex-shrink:0;" viewBox="0 0 16 16"><path d="M4 6l4 4 4-4"/></svg>
+            <svg style="width:13px;height:13px;stroke:var(--amber);fill:none;stroke-width:1.5;flex-shrink:0;" viewBox="0 0 16 16"><path d="M2 5l6-3 6 3v6l-6 3-6-3V5z"/></svg>
+            <span style="font-size:12px;font-weight:600;color:var(--text-primary);">G 公司治理</span>
+          </div>
+          <!-- G sub -->
+          <div style="padding-left:20px;">
+            <div style="display:flex;align-items:center;gap:4px;padding:4px 6px;border-radius:var(--radius-sm);cursor:pointer;margin-bottom:1px;" onmouseover="this.style.background='var(--bg-page)'" onmouseout="this.style.background='transparent'">
+              <svg style="width:12px;height:12px;stroke:var(--text-muted);fill:none;stroke-width:2;flex-shrink:0;" viewBox="0 0 16 16"><path d="M6 4l4 4-4 4"/></svg>
+              <svg style="width:13px;height:13px;stroke:var(--amber);fill:none;stroke-width:1.5;flex-shrink:0;" viewBox="0 0 16 16"><path d="M2 4h12v10H2z"/><path d="M5 4V2h6v2"/></svg>
+              <span style="font-size:12px;color:var(--text-secondary);">GA 可持续发展治理</span>
+            </div>
+            <div style="padding-left:18px;">
+              <div style="display:flex;align-items:center;gap:5px;padding:4px 6px;border-radius:var(--radius-sm);cursor:pointer;margin-bottom:1px;background:var(--blue-light);">
+                <span style="width:6px;height:6px;border-radius:50%;background:var(--blue-accent);flex-shrink:0;"></span>
+                <span style="font-size:12px;color:var(--navy);font-weight:500;">GA1 治理架构</span>
+              </div>
+              <div style="display:flex;align-items:center;gap:5px;padding:4px 6px;border-radius:var(--radius-sm);cursor:pointer;margin-bottom:1px;" onmouseover="this.style.background='var(--bg-page)'" onmouseout="this.style.background='transparent'">
+                <span style="width:6px;height:6px;border-radius:50%;background:var(--green);flex-shrink:0;"></span>
+                <span style="font-size:12px;color:var(--text-secondary);">GA2 ESG 管理</span>
+              </div>
+              <div style="display:flex;align-items:center;gap:5px;padding:4px 6px;border-radius:var(--radius-sm);cursor:pointer;margin-bottom:1px;" onmouseover="this.style.background='var(--bg-page)'" onmouseout="this.style.background='transparent'">
+                <span style="width:6px;height:6px;border-radius:50%;background:var(--green);flex-shrink:0;"></span>
+                <span style="font-size:12px;color:var(--text-secondary);">GA3 利益相关方</span>
+              </div>
+            </div>
+          </div>
+          <!-- E 环境 -->
+          <div style="display:flex;align-items:center;gap:4px;padding:5px 6px;border-radius:var(--radius-sm);cursor:pointer;margin-bottom:1px;" onmouseover="this.style.background='var(--bg-page)'" onmouseout="this.style.background='transparent'">
+            <svg style="width:12px;height:12px;stroke:var(--text-muted);fill:none;stroke-width:2;flex-shrink:0;" viewBox="0 0 16 16"><path d="M6 4l4 4-4 4"/></svg>
+            <svg style="width:13px;height:13px;stroke:var(--amber);fill:none;stroke-width:1.5;flex-shrink:0;" viewBox="0 0 16 16"><path d="M2 5l6-3 6 3v6l-6 3-6-3V5z"/></svg>
+            <span style="font-size:12px;font-weight:600;color:var(--text-primary);">E 环境保护</span>
+          </div>
+          <div style="padding-left:20px;">
+            <div style="display:flex;align-items:center;gap:4px;padding:4px 6px;border-radius:var(--radius-sm);cursor:pointer;margin-bottom:1px;" onmouseover="this.style.background='var(--bg-page)'" onmouseout="this.style.background='transparent'">
+              <svg style="width:12px;height:12px;stroke:var(--text-muted);fill:none;stroke-width:2;flex-shrink:0;" viewBox="0 0 16 16"><path d="M4 6l4 4 4-4"/></svg>
+              <svg style="width:13px;height:13px;stroke:var(--amber);fill:none;stroke-width:1.5;flex-shrink:0;" viewBox="0 0 16 16"><path d="M2 4h12v10H2z"/><path d="M5 4V2h6v2"/></svg>
+              <span style="font-size:12px;color:var(--text-secondary);">EA 应对气候变化</span>
+            </div>
+            <div style="padding-left:18px;">
+              <div style="display:flex;align-items:center;gap:5px;padding:4px 6px;border-radius:var(--radius-sm);cursor:pointer;margin-bottom:1px;" onmouseover="this.style.background='var(--bg-page)'" onmouseout="this.style.background='transparent'">
+                <span style="width:6px;height:6px;border-radius:50%;background:var(--green);flex-shrink:0;"></span>
+                <span style="font-size:12px;color:var(--text-secondary);">EA1 能源消耗</span>
+              </div>
+              <div style="display:flex;align-items:center;gap:5px;padding:4px 6px;border-radius:var(--radius-sm);cursor:pointer;margin-bottom:1px;" onmouseover="this.style.background='var(--bg-page)'" onmouseout="this.style.background='transparent'">
+                <span style="width:6px;height:6px;border-radius:50%;background:var(--green);flex-shrink:0;"></span>
+                <span style="font-size:12px;color:var(--text-secondary);">EA2 碳排放</span>
+              </div>
+              <div style="display:flex;align-items:center;gap:5px;padding:4px 6px;border-radius:var(--radius-sm);cursor:pointer;margin-bottom:1px;" onmouseover="this.style.background='var(--bg-page)'" onmouseout="this.style.background='transparent'">
+                <span style="width:6px;height:6px;border-radius:50%;background:var(--text-muted);flex-shrink:0;opacity:0.5;"></span>
+                <span style="font-size:12px;color:var(--text-muted);opacity:0.7;">EA3 气候风险</span>
+              </div>
+              <div style="display:flex;align-items:center;gap:5px;padding:4px 6px;border-radius:var(--radius-sm);cursor:pointer;margin-bottom:1px;" onmouseover="this.style.background='var(--bg-page)'" onmouseout="this.style.background='transparent'">
+                <span style="width:6px;height:6px;border-radius:50%;background:var(--green);flex-shrink:0;"></span>
+                <span style="font-size:12px;color:var(--text-secondary);">EA4 清洁能源</span>
+              </div>
+            </div>
+            <div style="padding-left:18px;padding-top:2px;">
+              <div style="display:flex;align-items:center;gap:5px;padding:4px 6px;border-radius:var(--radius-sm);cursor:pointer;margin-bottom:1px;" onmouseover="this.style.background='var(--bg-page)'" onmouseout="this.style.background='transparent'">
+                <span style="width:6px;height:6px;border-radius:50%;background:var(--green);flex-shrink:0;"></span>
+                <span style="font-size:12px;color:var(--text-secondary);">EB3 废水管理</span>
+              </div>
+            </div>
+          </div>
+          <div style="display:flex;align-items:center;gap:4px;padding:5px 6px;border-radius:var(--radius-sm);cursor:pointer;margin-bottom:1px;" onmouseover="this.style.background='var(--bg-page)'" onmouseout="this.style.background='transparent'">
+            <svg style="width:12px;height:12px;stroke:var(--text-muted);fill:none;stroke-width:2;flex-shrink:0;" viewBox="0 0 16 16"><path d="M6 4l4 4-4 4"/></svg>
+            <svg style="width:13px;height:13px;stroke:var(--amber);fill:none;stroke-width:1.5;flex-shrink:0;" viewBox="0 0 16 16"><path d="M2 5l6-3 6 3v6l-6 3-6-3V5z"/></svg>
+            <span style="font-size:12px;font-weight:600;color:var(--text-primary);">S 社会责任</span>
+          </div>
+        </div>
+        <!-- Stats -->
+        <div style="padding:10px 12px;border-top:1px solid var(--border);background:var(--bg-page);">
+          <div style="margin-bottom:6px;">
+            <div style="display:flex;justify-content:space-between;font-size:11px;color:var(--text-muted);margin-bottom:4px;">
+              <span>完成进度</span><span style="font-weight:600;color:var(--text-primary);">87%</span>
+            </div>
+            <div style="height:3px;background:var(--border);border-radius:99px;overflow:hidden;">
+              <div style="width:87%;height:100%;background:linear-gradient(90deg,var(--blue-accent),var(--navy));border-radius:99px;"></div>
+            </div>
+          </div>
+          <div style="display:flex;flex-direction:column;gap:3px;">
+            <div style="display:flex;align-items:center;gap:5px;font-size:11px;color:var(--text-secondary);">
+              <span style="width:6px;height:6px;border-radius:50%;background:var(--blue-accent);flex-shrink:0;"></span>
+              103 已生成
+            </div>
+            <div style="display:flex;align-items:center;gap:5px;font-size:11px;color:var(--text-secondary);">
+              <span style="width:6px;height:6px;border-radius:50%;background:var(--border);flex-shrink:0;"></span>
+              12 已跳过
+            </div>
+            <div style="display:flex;align-items:center;gap:5px;font-size:11px;color:var(--text-secondary);">
+              <span style="width:6px;height:6px;border-radius:50%;background:var(--green);flex-shrink:0;"></span>
+              4 已审核
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- CENTER: Content Editor -->
+      <div style="flex:1;min-width:0;display:flex;flex-direction:column;overflow:hidden;background:var(--bg-card);">
+        <!-- Chapter Header -->
+        <div style="padding:14px 20px 10px;border-bottom:1px solid var(--border-light);background:var(--bg-card);display:flex;align-items:center;justify-content:space-between;">
+          <div>
+            <div style="display:flex;align-items:center;gap:8px;margin-bottom:3px;">
+              <span style="font-family:var(--font-heading);font-size:15px;font-weight:700;color:var(--text-primary);">GA1 治理架构</span>
+              <span class="badge badge-blue"><span class="badge-dot"></span>待审核</span>
+            </div>
+            <div style="font-size:11px;color:var(--text-muted);">G 公司治理 · GA 可持续发展治理</div>
+          </div>
+          <div style="display:flex;gap:4px;">
+            <button class="btn-ghost" style="font-size:11px;padding:3px 10px;">标记审核</button>
+            <button class="btn-ghost" style="font-size:11px;padding:3px 10px;">批准</button>
+          </div>
+        </div>
+        <!-- Editor Formatting Bar -->
+        <div style="padding:5px 10px;border-bottom:1px solid var(--border-light);display:flex;align-items:center;gap:2px;background:var(--bg-page);">
+          <button style="padding:3px 6px;border:none;background:none;cursor:pointer;border-radius:3px;font-size:12px;font-weight:700;color:var(--text-secondary);" onmouseover="this.style.background='var(--border-light)'" onmouseout="this.style.background='none'">B</button>
+          <button style="padding:3px 6px;border:none;background:none;cursor:pointer;border-radius:3px;font-size:12px;font-style:italic;color:var(--text-secondary);" onmouseover="this.style.background='var(--border-light)'" onmouseout="this.style.background='none'">I</button>
+          <button style="padding:3px 6px;border:none;background:none;cursor:pointer;border-radius:3px;font-size:12px;text-decoration:underline;color:var(--text-secondary);" onmouseover="this.style.background='var(--border-light)'" onmouseout="this.style.background='none'">U</button>
+          <div style="width:1px;height:14px;background:var(--border);margin:0 4px;"></div>
+          <button style="padding:3px 6px;border:none;background:none;cursor:pointer;border-radius:3px;font-size:11px;color:var(--text-secondary);" onmouseover="this.style.background='var(--border-light)'" onmouseout="this.style.background='none'">H1</button>
+          <button style="padding:3px 6px;border:none;background:none;cursor:pointer;border-radius:3px;font-size:11px;color:var(--text-secondary);" onmouseover="this.style.background='var(--border-light)'" onmouseout="this.style.background='none'">H2</button>
+          <div style="width:1px;height:14px;background:var(--border);margin:0 4px;"></div>
+          <button style="padding:3px 6px;border:none;background:none;cursor:pointer;border-radius:3px;color:var(--text-secondary);" onmouseover="this.style.background='var(--border-light)'" onmouseout="this.style.background='none'">
+            <svg style="width:12px;height:12px;stroke:currentColor;fill:none;stroke-width:2;" viewBox="0 0 16 16"><path d="M2 4h12M2 8h12M2 12h8"/></svg>
+          </button>
+        </div>
+        <!-- Editor Content -->
+        <div style="flex:1;overflow-y:auto;padding:20px 24px;font-family:var(--font-body);font-size:13px;line-height:1.8;color:var(--text-primary);">
+          <h2 style="font-family:var(--font-heading);font-size:15px;font-weight:700;color:var(--navy);margin-bottom:10px;">一、治理架构概述</h2>
+          <p style="margin-bottom:10px;">公司严格按照《公司法》《证券法》及上海证券交易所相关规则，建立了以股东大会、董事会、监事会和管理层为核心的现代企业治理体系。<span style="display:inline-flex;align-items:center;justify-content:center;min-width:16px;height:16px;padding:0 3px;font-size:10px;font-weight:600;color:var(--blue-accent);background:var(--blue-light);border-radius:3px;cursor:pointer;vertical-align:super;line-height:1;margin:0 1px;">来源1</span> 董事会下设战略委员会、审计委员会、薪酬与考核委员会及提名委员会四个专业委员会，确保重大决策的科学性与规范性。</p>
+          <p style="margin-bottom:10px;">报告期内，公司董事会共召开 12 次会议，审议通过重大事项 47 项，包括年度财务预算、重大投资决策及 ESG 工作年度计划。<span style="display:inline-flex;align-items:center;justify-content:center;min-width:16px;height:16px;padding:0 3px;font-size:10px;font-weight:600;color:var(--blue-accent);background:var(--blue-light);border-radius:3px;cursor:pointer;vertical-align:super;line-height:1;margin:0 1px;">来源2</span></p>
+          <div style="background:var(--amber-bg);border-left:3px solid var(--amber);padding:10px 14px;margin:14px 0;border-radius:0 var(--radius-sm) var(--radius-sm) 0;font-size:12px;color:var(--amber);">
+            待补充：独立董事的具体履职情况及 2025 年度出席率数据
+          </div>
+          <h2 style="font-family:var(--font-heading);font-size:15px;font-weight:700;color:var(--navy);margin:16px 0 10px;">二、ESG 管治机制</h2>
+          <p style="margin-bottom:10px;">公司于 2023 年设立可持续发展委员会，由董事长担任主任委员，分管 ESG 事务的副总裁担任执行委员长。委员会每季度召开一次工作会议，统筹协调全公司 ESG 相关工作。<span style="display:inline-flex;align-items:center;justify-content:center;min-width:16px;height:16px;padding:0 3px;font-size:10px;font-weight:600;color:var(--blue-accent);background:var(--blue-light);border-radius:3px;cursor:pointer;vertical-align:super;line-height:1;margin:0 1px;">来源3</span></p>
+          <!-- pending block -->
+          <div style="font-size:12px;color:var(--text-muted);margin-top:16px;padding-top:12px;border-top:1px solid var(--border-light);display:flex;justify-content:space-between;">
+            <span>字数：826</span>
+            <span>最后保存：2026-04-08 14:32</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- RIGHT: Source Panel -->
+      <div style="width:300px;flex-shrink:0;background:var(--bg-sidebar);border-left:1px solid var(--border);display:flex;flex-direction:column;overflow:hidden;">
+        <div style="padding:10px 12px 8px;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;">
+          <span style="font-size:12px;font-weight:600;color:var(--text-primary);">参考信源</span>
+          <span style="font-size:11px;color:var(--text-muted);">3 条 · 2 被引用</span>
+        </div>
+        <div style="flex:1;overflow-y:auto;padding:8px;">
+
+          <!-- Source Card 1: Cited -->
+          <div style="border:1px solid var(--border);border-left:3px solid var(--blue-accent);border-radius:var(--radius);margin-bottom:8px;overflow:hidden;background:var(--bg-card);">
+            <div style="padding:8px 10px;border-bottom:1px solid var(--border-light);">
+              <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:3px;">
+                <div style="display:flex;align-items:center;gap:6px;">
+                  <span style="font-size:12px;font-weight:600;color:var(--text-primary);">[来源1]</span>
+                  <span style="font-size:10px;padding:1px 6px;background:var(--green-bg);color:var(--green);border-radius:99px;">已引用</span>
+                </div>
+                <span style="font-size:11px;color:var(--text-muted);">92%</span>
+              </div>
+              <div style="font-size:11px;color:var(--text-secondary);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">公司治理报告_2025.pdf</div>
+              <div style="height:3px;background:var(--border-light);border-radius:99px;margin-top:5px;overflow:hidden;">
+                <div style="width:92%;height:100%;background:var(--blue-accent);border-radius:99px;"></div>
+              </div>
+            </div>
+            <div style="padding:8px 10px;font-size:12px;color:var(--text-secondary);line-height:1.7;">
+              本公司董事会由 9 名董事组成，其中独立董事 3 名，占比 33.3%。董事会下设四个专业委员会…
+            </div>
+          </div>
+
+          <!-- Source Card 2: Cited -->
+          <div style="border:1px solid var(--border);border-left:3px solid var(--blue-accent);border-radius:var(--radius);margin-bottom:8px;overflow:hidden;background:var(--bg-card);">
+            <div style="padding:8px 10px;border-bottom:1px solid var(--border-light);">
+              <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:3px;">
+                <div style="display:flex;align-items:center;gap:6px;">
+                  <span style="font-size:12px;font-weight:600;color:var(--text-primary);">[来源2]</span>
+                  <span style="font-size:10px;padding:1px 6px;background:var(--green-bg);color:var(--green);border-radius:99px;">已引用</span>
+                </div>
+                <span style="font-size:11px;color:var(--text-muted);">85%</span>
+              </div>
+              <div style="font-size:11px;color:var(--text-secondary);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">董事会决议汇总_2025Q4.docx</div>
+              <div style="height:3px;background:var(--border-light);border-radius:99px;margin-top:5px;overflow:hidden;">
+                <div style="width:85%;height:100%;background:var(--blue-accent);border-radius:99px;"></div>
+              </div>
+            </div>
+            <div style="padding:8px 10px;font-size:12px;color:var(--text-secondary);line-height:1.7;">
+              2025 年度董事会会议共召开 12 次，平均出席率 96.2%，审议通过议案 47 项…
+            </div>
+          </div>
+
+          <!-- Source Card 3: Not cited -->
+          <div style="border:1px solid var(--border);border-left:3px solid var(--border);border-radius:var(--radius);margin-bottom:8px;overflow:hidden;background:var(--bg-card);opacity:0.85;">
+            <div style="padding:8px 10px;border-bottom:1px solid var(--border-light);">
+              <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:3px;">
+                <div style="display:flex;align-items:center;gap:6px;">
+                  <span style="font-size:12px;font-weight:600;color:var(--text-primary);">[来源3]</span>
+                  <span style="font-size:10px;padding:1px 6px;background:var(--border-light);color:var(--text-muted);border-radius:99px;">未引用</span>
+                </div>
+                <span style="font-size:11px;color:var(--text-muted);">71%</span>
+              </div>
+              <div style="font-size:11px;color:var(--text-secondary);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">ESG工作委员会章程.pdf</div>
+              <div style="height:3px;background:var(--border-light);border-radius:99px;margin-top:5px;overflow:hidden;">
+                <div style="width:71%;height:100%;background:var(--text-muted);border-radius:99px;"></div>
+              </div>
+            </div>
+            <div style="padding:8px 10px;font-size:12px;color:var(--text-secondary);line-height:1.7;">
+              可持续发展委员会职责范围包括：制定公司 ESG 战略目标、监督 ESG 信息披露…
+            </div>
+          </div>
+
+        </div>
+      </div>
+    </div>
+
+    <!-- Bottom Status Bar -->
+    <div style="height:28px;background:var(--bg-card);border-top:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;padding:0 16px;font-size:11px;color:var(--text-muted);">
+      <div style="display:flex;align-items:center;gap:12px;">
+        <span>进度：103 / 119 已生成</span>
+        <span style="color:var(--border);">|</span>
+        <span>12 已跳过</span>
+        <span style="color:var(--border);">|</span>
+        <span>4 已审核</span>
+      </div>
+      <div>合计 82,450 字</div>
+    </div>
+  </div>
+</div>
+
+
+<!-- ============================================================
+     SECTION 4: Pipeline Dashboard
+     ============================================================ -->
+<div class="demo-section">
+  <div class="demo-label">Section 4 · Pipeline Dashboard</div>
+  <div class="demo-frame">
+    <!-- Pipeline Header -->
+    <header class="app-header">
+      <div class="app-header-brand">
+        <div class="app-header-logo" style="background:var(--indigo);">
+          <svg viewBox="0 0 16 16"><circle cx="8" cy="8" r="2"/><path d="M8 1v2M8 13v2M1 8h2M13 8h2M3.5 3.5l1.4 1.4M11.1 11.1l1.4 1.4M11.1 4.9l1.4-1.4M3.5 12.5l1.4-1.4" stroke-linecap="round"/></svg>
+        </div>
+        <span class="app-header-title">艾森股份 2025 — Pipeline</span>
+      </div>
+      <nav class="app-header-nav">
+        <a href="#">
+          <svg class="nav-icon" viewBox="0 0 16 16"><path d="M1 6l7-5 7 5v8a1 1 0 01-1 1H2a1 1 0 01-1-1V6z"/></svg>
+          首页
+        </a>
+        <a href="#">
+          <svg class="nav-icon" viewBox="0 0 16 16"><path d="M2 4h12M2 8h8M2 12h10" stroke-linecap="round"/></svg>
+          编辑器
+        </a>
+      </nav>
+    </header>
+
+    <!-- Tab Nav -->
+    <div style="background:var(--bg-card);border-bottom:1px solid var(--border);">
+      <div style="padding:0 24px;display:flex;gap:0;">
+        <a href="#" style="padding:10px 16px;font-size:12px;font-weight:600;color:var(--navy);border-bottom:2px solid var(--navy);text-decoration:none;">Dashboard</a>
+        <a href="#" style="padding:10px 16px;font-size:12px;font-weight:500;color:var(--text-muted);border-bottom:2px solid transparent;text-decoration:none;">分块浏览</a>
+        <a href="#" style="padding:10px 16px;font-size:12px;font-weight:500;color:var(--text-muted);border-bottom:2px solid transparent;text-decoration:none;">段落浏览</a>
+        <a href="#" style="padding:10px 16px;font-size:12px;font-weight:500;color:var(--text-muted);border-bottom:2px solid transparent;text-decoration:none;">检索结果</a>
+      </div>
+    </div>
+
+    <!-- Dashboard Content -->
+    <div style="background:var(--bg-page);padding:20px 24px;display:grid;grid-template-columns:1fr 2fr;gap:16px;">
+
+      <!-- Left Col -->
+      <div style="display:flex;flex-direction:column;gap:14px;">
+
+        <!-- Controls Card -->
+        <div style="background:var(--bg-card);border:1px solid var(--border);border-radius:var(--radius-lg);padding:16px;box-shadow:var(--shadow-sm);">
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;">
+            <span style="font-size:11px;font-weight:600;letter-spacing:0.08em;text-transform:uppercase;color:var(--text-muted);">Pipeline 控制</span>
+            <button style="border:none;background:none;cursor:pointer;color:var(--text-muted);">
+              <svg style="width:14px;height:14px;stroke:currentColor;fill:none;stroke-width:2;" viewBox="0 0 16 16"><circle cx="8" cy="8" r="1"/><circle cx="8" cy="3" r="1"/><circle cx="8" cy="13" r="1"/></svg>
+            </button>
+          </div>
+          <!-- Steps -->
+          <div style="display:flex;flex-direction:column;gap:6px;margin-bottom:14px;">
+            <label style="display:flex;align-items:center;gap:8px;padding:7px 10px;border-radius:var(--radius);background:var(--blue-light);cursor:pointer;">
+              <input type="checkbox" checked style="accent-color:var(--navy);">
+              <div>
+                <div style="font-size:12px;font-weight:500;color:var(--navy);">Step 2 · 文本提取与对齐</div>
+                <div style="font-size:10px;color:var(--text-muted);">align_evidence.py</div>
+              </div>
+            </label>
+            <label style="display:flex;align-items:center;gap:8px;padding:7px 10px;border-radius:var(--radius);background:var(--blue-light);cursor:pointer;">
+              <input type="checkbox" checked style="accent-color:var(--navy);">
+              <div>
+                <div style="font-size:12px;font-weight:500;color:var(--navy);">Step 3 · 检索 Query 生成</div>
+                <div style="font-size:10px;color:var(--text-muted);">generate_retrieval_queries.py</div>
+              </div>
+            </label>
+            <label style="display:flex;align-items:center;gap:8px;padding:7px 10px;border-radius:var(--radius);background:var(--blue-light);cursor:pointer;">
+              <input type="checkbox" checked style="accent-color:var(--navy);">
+              <div>
+                <div style="font-size:12px;font-weight:500;color:var(--navy);">Step 4 · 三路混合检索</div>
+                <div style="font-size:10px;color:var(--text-muted);">generate_report_draft.py</div>
+              </div>
+            </label>
+            <label style="display:flex;align-items:center;gap:8px;padding:7px 10px;border-radius:var(--radius);background:var(--bg-page);cursor:pointer;border:1px solid var(--border-light);">
+              <input type="checkbox" style="accent-color:var(--navy);">
+              <div>
+                <div style="font-size:12px;font-weight:500;color:var(--text-secondary);">Step 5 · LLM 并发撰稿</div>
+                <div style="font-size:10px;color:var(--text-muted);">generate_draft.py</div>
+              </div>
+            </label>
+          </div>
+          <button class="btn-primary" style="width:100%;justify-content:center;padding:8px;">
+            <svg viewBox="0 0 16 16"><path d="M5 3l9 5-9 5V3z"/></svg>
+            运行选中步骤
+          </button>
+        </div>
+
+        <!-- Run History -->
+        <div style="background:var(--bg-card);border:1px solid var(--border);border-radius:var(--radius-lg);padding:16px;box-shadow:var(--shadow-sm);">
+          <div style="font-size:11px;font-weight:600;letter-spacing:0.08em;text-transform:uppercase;color:var(--text-muted);margin-bottom:12px;">历史记录</div>
+          <div style="display:flex;flex-direction:column;gap:6px;">
+            <div style="display:flex;align-items:center;justify-content:space-between;padding:7px 10px;border-radius:var(--radius);background:var(--indigo-bg);border:1px solid #C7D2FE;cursor:pointer;">
+              <div>
+                <div style="font-size:11px;font-weight:600;color:var(--indigo);">run_20260408_143201</div>
+                <div style="font-size:10px;color:var(--text-muted);">Step 2-4 · 当前</div>
+              </div>
+              <span class="badge badge-indigo" style="font-size:10px;"><span class="badge-dot"></span>运行中</span>
+            </div>
+            <div style="display:flex;align-items:center;justify-content:space-between;padding:7px 10px;border-radius:var(--radius);border:1px solid var(--border-light);cursor:pointer;" onmouseover="this.style.background='var(--bg-page)'" onmouseout="this.style.background='transparent'">
+              <div>
+                <div style="font-size:11px;font-weight:500;color:var(--text-primary);">run_20260406_092015</div>
+                <div style="font-size:10px;color:var(--text-muted);">Step 5 · 2026-04-06</div>
+              </div>
+              <span class="badge badge-green" style="font-size:10px;"><span class="badge-dot"></span>已完成</span>
+            </div>
+            <div style="display:flex;align-items:center;justify-content:space-between;padding:7px 10px;border-radius:var(--radius);border:1px solid var(--border-light);cursor:pointer;" onmouseover="this.style.background='var(--bg-page)'" onmouseout="this.style.background='transparent'">
+              <div>
+                <div style="font-size:11px;font-weight:500;color:var(--text-primary);">run_20260405_165533</div>
+                <div style="font-size:10px;color:var(--text-muted);">Step 2-5 · 2026-04-05</div>
+              </div>
+              <span class="badge badge-red" style="font-size:10px;"><span class="badge-dot"></span>失败</span>
+            </div>
+          </div>
+        </div>
+
+      </div>
+
+      <!-- Right Col -->
+      <div style="display:flex;flex-direction:column;gap:14px;">
+
+        <!-- Current Run Overview -->
+        <div style="background:var(--bg-card);border:1px solid var(--border);border-radius:var(--radius-lg);padding:16px;box-shadow:var(--shadow-sm);display:flex;align-items:center;justify-content:space-between;">
+          <div>
+            <div style="font-size:11px;font-weight:600;letter-spacing:0.08em;text-transform:uppercase;color:var(--text-muted);margin-bottom:4px;">当前运行</div>
+            <div style="font-size:11px;font-family:monospace;color:var(--text-secondary);">run_20260408_143201</div>
+          </div>
+          <span class="badge badge-indigo"><span class="badge-dot"></span>运行中</span>
+        </div>
+
+        <!-- Step Timeline -->
+        <div style="background:var(--bg-card);border:1px solid var(--border);border-radius:var(--radius-lg);padding:16px;box-shadow:var(--shadow-sm);">
+          <div style="font-size:11px;font-weight:600;letter-spacing:0.08em;text-transform:uppercase;color:var(--text-muted);margin-bottom:14px;">执行步骤</div>
+          <div style="display:flex;flex-direction:column;gap:0;">
+
+            <!-- Step Done -->
+            <div style="display:flex;align-items:flex-start;gap:10px;padding:8px 10px;border-radius:var(--radius);background:var(--green-bg);">
+              <svg style="width:18px;height:18px;stroke:var(--green);fill:none;stroke-width:2;flex-shrink:0;margin-top:1px;" viewBox="0 0 16 16"><circle cx="8" cy="8" r="7"/><path d="M5 8l2 2 4-4" stroke-linecap="round" stroke-linejoin="round"/></svg>
+              <div style="flex:1;">
+                <div style="font-size:12px;font-weight:600;color:var(--text-primary);">Step 2 · 文本提取与对齐</div>
+                <div style="font-size:11px;color:var(--text-muted);">已完成 · 255 个文件 · 6,412 个分块</div>
+              </div>
+              <span style="font-size:11px;color:var(--text-muted);">4m 23s</span>
+            </div>
+            <!-- connector -->
+            <div style="margin-left:18px;width:2px;height:10px;background:var(--border);"></div>
+
+            <!-- Step Running -->
+            <div style="display:flex;align-items:flex-start;gap:10px;padding:8px 10px;border-radius:var(--radius);background:var(--indigo-bg);border:1px solid #C7D2FE;">
+              <svg style="width:18px;height:18px;stroke:var(--indigo);fill:none;stroke-width:2;flex-shrink:0;margin-top:1px;animation:spin 1s linear infinite;" viewBox="0 0 16 16"><circle cx="8" cy="8" r="7" stroke-dasharray="32" stroke-dashoffset="8"/></svg>
+              <div style="flex:1;">
+                <div style="font-size:12px;font-weight:600;color:var(--indigo);">Step 3 · 检索 Query 生成</div>
+                <div style="font-size:11px;color:var(--text-muted);">正在处理第 4 批 · 119 个叶节点</div>
+                <!-- progress -->
+                <div style="margin-top:6px;height:3px;background:rgba(55,48,163,0.1);border-radius:99px;overflow:hidden;">
+                  <div style="width:58%;height:100%;background:var(--indigo);border-radius:99px;"></div>
+                </div>
+              </div>
+              <span style="font-size:11px;color:var(--indigo);">58%</span>
+            </div>
+            <div style="margin-left:18px;width:2px;height:10px;background:var(--border);"></div>
+
+            <!-- Step Pending -->
+            <div style="display:flex;align-items:flex-start;gap:10px;padding:8px 10px;border-radius:var(--radius);background:var(--bg-page);">
+              <svg style="width:18px;height:18px;stroke:var(--border);fill:none;stroke-width:2;flex-shrink:0;margin-top:1px;" viewBox="0 0 16 16"><circle cx="8" cy="8" r="7"/></svg>
+              <div>
+                <div style="font-size:12px;color:var(--text-muted);">Step 4 · 三路混合检索</div>
+                <div style="font-size:11px;color:var(--text-muted);">等待中</div>
+              </div>
+            </div>
+
+          </div>
+        </div>
+
+        <!-- Chapter Grid (mini) -->
+        <div style="background:var(--bg-card);border:1px solid var(--border);border-radius:var(--radius-lg);padding:16px;box-shadow:var(--shadow-sm);">
+          <div style="font-size:11px;font-weight:600;letter-spacing:0.08em;text-transform:uppercase;color:var(--text-muted);margin-bottom:12px;">章节进度 (119 个)</div>
+          <div style="display:flex;flex-wrap:wrap;gap:3px;">
+            <!-- green = done, indigo = running, gray = pending -->
+            <script>
+              (function(){
+                var colors=['#1A7A4A','#1A7A4A','#1A7A4A','#1A7A4A','#1A7A4A','#1A7A4A','#1A7A4A','#1A7A4A','#1A7A4A','#1A7A4A','#1A7A4A','#1A7A4A','#1A7A4A','#1A7A4A','#1A7A4A','#1A7A4A','#1A7A4A','#1A7A4A','#1A7A4A','#1A7A4A','#1A7A4A','#1A7A4A','#1A7A4A','#1A7A4A','#1A7A4A','#1A7A4A','#1A7A4A','#1A7A4A','#1A7A4A','#1A7A4A','#1A7A4A','#1A7A4A','#1A7A4A','#1A7A4A','#1A7A4A','#1A7A4A','#1A7A4A','#1A7A4A','#1A7A4A','#1A7A4A','#1A7A4A','#1A7A4A','#1A7A4A','#1A7A4A','#1A7A4A','#1A7A4A','#1A7A4A','#1A7A4A','#1A7A4A','#1A7A4A','#1A7A4A','#1A7A4A','#1A7A4A','#1A7A4A','#1A7A4A','#1A7A4A','#1A7A4A','#1A7A4A','#1A7A4A','#1A7A4A','#1A7A4A','#1A7A4A','#1A7A4A','#1A7A4A','#1A7A4A','#1A7A4A','#1A7A4A','#1A7A4A','#1A7A4A','#3730A3','#D1D5DB','#D1D5DB','#D1D5DB','#D1D5DB','#D1D5DB','#D1D5DB','#D1D5DB','#D1D5DB','#D1D5DB','#D1D5DB','#D1D5DB','#D1D5DB','#D1D5DB','#D1D5DB','#D1D5DB','#D1D5DB','#D1D5DB','#D1D5DB','#D1D5DB','#D1D5DB','#D1D5DB','#D1D5DB','#D1D5DB','#D1D5DB','#D1D5DB','#D1D5DB','#D1D5DB','#D1D5DB','#D1D5DB','#D1D5DB','#D1D5DB','#D1D5DB','#D1D5DB','#D1D5DB','#D1D5DB','#D1D5DB','#D1D5DB','#D1D5DB','#D1D5DB','#D1D5DB','#D1D5DB','#D1D5DB','#D1D5DB','#D1D5DB','#D1D5DB','#D1D5DB','#D1D5DB','#D1D5DB','#D1D5DB'];
+                document.write(colors.map(function(c){return '<div style="width:10px;height:10px;border-radius:2px;background:'+c+';" title="章节"></div>';}).join(''));
+              })();
+            </script>
+          </div>
+          <div style="display:flex;gap:12px;margin-top:10px;font-size:11px;">
+            <span style="display:flex;align-items:center;gap:4px;color:var(--text-muted);"><span style="width:8px;height:8px;border-radius:2px;background:var(--green);"></span>69 完成</span>
+            <span style="display:flex;align-items:center;gap:4px;color:var(--text-muted);"><span style="width:8px;height:8px;border-radius:2px;background:var(--indigo);"></span>1 运行中</span>
+            <span style="display:flex;align-items:center;gap:4px;color:var(--text-muted);"><span style="width:8px;height:8px;border-radius:2px;background:var(--border);"></span>49 等待</span>
+          </div>
+        </div>
+
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ============================================================
+     SECTION 5: 分块浏览
+     ============================================================ -->
+<div class="demo-section">
+  <div class="demo-label">Section 5 · Pipeline 子页 · 分块浏览</div>
+  <div class="demo-frame">
+    <!-- Header -->
+    <header class="app-header">
+      <div class="app-header-brand">
+        <div class="app-header-logo" style="background:var(--indigo);">
+          <svg viewBox="0 0 16 16"><circle cx="8" cy="8" r="2"/><path d="M8 1v2M8 13v2M1 8h2M13 8h2" stroke-linecap="round"/></svg>
+        </div>
+        <span class="app-header-title">艾森股份 2025 — Pipeline</span>
+      </div>
+      <nav class="app-header-nav">
+        <a href="#"><svg class="nav-icon" viewBox="0 0 16 16"><path d="M1 6l7-5 7 5v8a1 1 0 01-1 1H2a1 1 0 01-1-1V6z"/></svg>首页</a>
+        <a href="#"><svg class="nav-icon" viewBox="0 0 16 16"><path d="M2 4h12M2 8h8M2 12h10" stroke-linecap="round"/></svg>编辑器</a>
+      </nav>
+    </header>
+    <!-- Tab Nav -->
+    <div style="background:var(--bg-card);border-bottom:1px solid var(--border);">
+      <div style="padding:0 24px;display:flex;gap:0;">
+        <a href="#" style="padding:10px 16px;font-size:12px;color:var(--text-muted);border-bottom:2px solid transparent;text-decoration:none;">Dashboard</a>
+        <a href="#" style="padding:10px 16px;font-size:12px;font-weight:600;color:var(--navy);border-bottom:2px solid var(--navy);text-decoration:none;">分块浏览</a>
+        <a href="#" style="padding:10px 16px;font-size:12px;color:var(--text-muted);border-bottom:2px solid transparent;text-decoration:none;">段落浏览</a>
+        <a href="#" style="padding:10px 16px;font-size:12px;color:var(--text-muted);border-bottom:2px solid transparent;text-decoration:none;">检索结果</a>
+      </div>
+    </div>
+    <!-- Content -->
+    <div style="padding:20px 24px;background:var(--bg-page);">
+      <!-- Search & Filter Row -->
+      <div style="display:flex;gap:10px;margin-bottom:16px;">
+        <div style="position:relative;flex:1;">
+          <svg style="position:absolute;left:10px;top:50%;transform:translateY(-50%);width:13px;height:13px;stroke:var(--text-muted);fill:none;stroke-width:2;" viewBox="0 0 16 16"><circle cx="7" cy="7" r="5"/><path d="M12 12l2 2"/></svg>
+          <input type="text" placeholder="搜索分块内容…" style="width:100%;padding:7px 10px 7px 30px;font-size:12px;font-family:var(--font-body);border:1px solid var(--border);border-radius:var(--radius);background:var(--bg-card);color:var(--text-primary);outline:none;">
+        </div>
+        <select style="padding:7px 10px;font-size:12px;font-family:var(--font-body);border:1px solid var(--border);border-radius:var(--radius);background:var(--bg-card);color:var(--text-primary);outline:none;cursor:pointer;">
+          <option>全部文件夹</option>
+          <option>EA1 能源消耗</option>
+          <option>EB3 废水管理</option>
+          <option>GA1 治理架构</option>
+        </select>
+        <select style="padding:7px 10px;font-size:12px;font-family:var(--font-body);border:1px solid var(--border);border-radius:var(--radius);background:var(--bg-card);color:var(--text-primary);outline:none;cursor:pointer;">
+          <option>全部类型</option>
+          <option>普通文本</option>
+          <option>表格</option>
+        </select>
+      </div>
+
+      <!-- Table -->
+      <div style="background:var(--bg-card);border:1px solid var(--border);border-radius:var(--radius-lg);overflow:hidden;box-shadow:var(--shadow-sm);">
+        <table style="width:100%;border-collapse:collapse;font-size:12px;">
+          <thead>
+            <tr style="background:var(--bg-page);border-bottom:1px solid var(--border);">
+              <th style="padding:9px 14px;text-align:left;font-size:11px;font-weight:600;color:var(--text-muted);letter-spacing:0.06em;text-transform:uppercase;width:15%;">文件夹</th>
+              <th style="padding:9px 14px;text-align:left;font-size:11px;font-weight:600;color:var(--text-muted);letter-spacing:0.06em;text-transform:uppercase;width:20%;">文件名</th>
+              <th style="padding:9px 14px;text-align:left;font-size:11px;font-weight:600;color:var(--text-muted);letter-spacing:0.06em;text-transform:uppercase;">内容预览</th>
+              <th style="padding:9px 14px;text-align:right;font-size:11px;font-weight:600;color:var(--text-muted);letter-spacing:0.06em;text-transform:uppercase;width:7%;">字数</th>
+              <th style="padding:9px 14px;text-align:center;font-size:11px;font-weight:600;color:var(--text-muted);letter-spacing:0.06em;text-transform:uppercase;width:7%;">类型</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr style="border-bottom:1px solid var(--border-light);" onmouseover="this.style.background='var(--bg-page)'" onmouseout="this.style.background='transparent'">
+              <td style="padding:10px 14px;"><span style="font-size:11px;padding:2px 7px;background:var(--indigo-bg);color:var(--indigo);border-radius:99px;">EA1</span></td>
+              <td style="padding:10px 14px;font-size:11px;color:var(--text-secondary);">能源管理报告2025.xlsx</td>
+              <td style="padding:10px 14px;color:var(--text-secondary);line-height:1.5;">2025年度公司综合能源消耗总量为 12,450 tce，较上年同期下降 5.2%，其中电力消耗占比 78.3%…</td>
+              <td style="padding:10px 14px;text-align:right;font-size:11px;color:var(--text-muted);">312</td>
+              <td style="padding:10px 14px;text-align:center;"><span style="font-size:10px;padding:1px 6px;background:var(--blue-light);color:var(--blue-accent);border-radius:99px;">表格</span></td>
+            </tr>
+            <tr style="border-bottom:1px solid var(--border-light);" onmouseover="this.style.background='var(--bg-page)'" onmouseout="this.style.background='transparent'">
+              <td style="padding:10px 14px;"><span style="font-size:11px;padding:2px 7px;background:var(--indigo-bg);color:var(--indigo);border-radius:99px;">GA1</span></td>
+              <td style="padding:10px 14px;font-size:11px;color:var(--text-secondary);">公司治理报告_2025.pdf</td>
+              <td style="padding:10px 14px;color:var(--text-secondary);line-height:1.5;">公司董事会由 9 名董事组成，其中独立董事 3 名，占比 33.3%。报告期内董事会共召开 12 次会议…</td>
+              <td style="padding:10px 14px;text-align:right;font-size:11px;color:var(--text-muted);">486</td>
+              <td style="padding:10px 14px;text-align:center;"><span style="font-size:10px;padding:1px 6px;background:var(--border-light);color:var(--text-muted);border-radius:99px;">文本</span></td>
+            </tr>
+            <tr style="border-bottom:1px solid var(--border-light);" onmouseover="this.style.background='var(--bg-page)'" onmouseout="this.style.background='transparent'">
+              <td style="padding:10px 14px;"><span style="font-size:11px;padding:2px 7px;background:var(--indigo-bg);color:var(--indigo);border-radius:99px;">EB3</span></td>
+              <td style="padding:10px 14px;font-size:11px;color:var(--text-secondary);">废水处理记录2025Q4.docx</td>
+              <td style="padding:10px 14px;color:var(--text-secondary);line-height:1.5;">第四季度废水处理总量为 8,920 吨，达标排放率 100%，COD 浓度平均值为 28.3 mg/L，低于国标限值…</td>
+              <td style="padding:10px 14px;text-align:right;font-size:11px;color:var(--text-muted);">274</td>
+              <td style="padding:10px 14px;text-align:center;"><span style="font-size:10px;padding:1px 6px;background:var(--border-light);color:var(--text-muted);border-radius:99px;">文本</span></td>
+            </tr>
+            <tr style="border-bottom:1px solid var(--border-light);" onmouseover="this.style.background='var(--bg-page)'" onmouseout="this.style.background='transparent'">
+              <td style="padding:10px 14px;"><span style="font-size:11px;padding:2px 7px;background:var(--indigo-bg);color:var(--indigo);border-radius:99px;">SD3</span></td>
+              <td style="padding:10px 14px;font-size:11px;color:var(--text-secondary);">员工薪酬与福利制度.pdf</td>
+              <td style="padding:10px 14px;color:var(--text-secondary);line-height:1.5;">公司建立了以岗位价值为基础、以绩效贡献为导向的薪酬体系，员工年均薪酬增长率为 8.5%…</td>
+              <td style="padding:10px 14px;text-align:right;font-size:11px;color:var(--text-muted);">528</td>
+              <td style="padding:10px 14px;text-align:center;"><span style="font-size:10px;padding:1px 6px;background:var(--border-light);color:var(--text-muted);border-radius:99px;">文本</span></td>
+            </tr>
+            <tr onmouseover="this.style.background='var(--bg-page)'" onmouseout="this.style.background='transparent'">
+              <td style="padding:10px 14px;"><span style="font-size:11px;padding:2px 7px;background:var(--indigo-bg);color:var(--indigo);border-radius:99px;">DA1</span></td>
+              <td style="padding:10px 14px;font-size:11px;color:var(--text-secondary);">研发投入统计表2025.xlsx</td>
+              <td style="padding:10px 14px;color:var(--text-secondary);line-height:1.5;">2025 年度研发投入合计 1.23 亿元，占营业收入的 6.8%，同比增长 15.2%，研发人员数量达 312 人…</td>
+              <td style="padding:10px 14px;text-align:right;font-size:11px;color:var(--text-muted);">398</td>
+              <td style="padding:10px 14px;text-align:center;"><span style="font-size:10px;padding:1px 6px;background:var(--blue-light);color:var(--blue-accent);border-radius:99px;">表格</span></td>
+            </tr>
+          </tbody>
+        </table>
+        <!-- Pagination -->
+        <div style="padding:10px 14px;border-top:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;background:var(--bg-page);">
+          <span style="font-size:11px;color:var(--text-muted);">共 6,412 条 · 第 1 / 129 页</span>
+          <div style="display:flex;gap:4px;">
+            <button style="padding:4px 10px;font-size:11px;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--bg-card);cursor:pointer;color:var(--text-secondary);">上一页</button>
+            <button style="padding:4px 10px;font-size:11px;border:1px solid var(--navy);border-radius:var(--radius-sm);background:var(--navy);cursor:pointer;color:#fff;">1</button>
+            <button style="padding:4px 10px;font-size:11px;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--bg-card);cursor:pointer;color:var(--text-secondary);">2</button>
+            <button style="padding:4px 10px;font-size:11px;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--bg-card);cursor:pointer;color:var(--text-secondary);">3</button>
+            <button style="padding:4px 10px;font-size:11px;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--bg-card);cursor:pointer;color:var(--text-secondary);">下一页</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- bottom spacer -->
+<div style="height:40px;"></div>
+
+<style>
+@keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+</style>
+
+</body>
+</html>
+

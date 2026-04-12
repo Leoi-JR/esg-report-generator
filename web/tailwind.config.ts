@@ -8,38 +8,104 @@ const config: Config = {
   ],
   theme: {
     extend: {
+      fontFamily: {
+        head: ["'Noto Serif SC'", "serif"],
+        body: ["'Noto Sans SC'", "sans-serif"],
+      },
       colors: {
-        border: "hsl(214.3, 31.8%, 91.4%)",
-        background: "hsl(0, 0%, 100%)",
-        foreground: "hsl(222.2, 84%, 4.9%)",
+        // Style C — 暖白务实 色彩系统
+        // 主色：墨绿
+        green: {
+          DEFAULT: "#2D6A4F",
+          hover: "#245C44",
+          soft: "#EAF4EE",
+          mid: "#C8E6D4",
+          line: "#95D5B2",
+          50: "#EAF4EE",
+          100: "#C8E6D4",
+          500: "#2D6A4F",
+          600: "#245C44",
+          700: "#1D4D39",
+        },
+        // Pipeline 专属：靛蓝
+        indigo: {
+          DEFAULT: "#3D3D99",
+          soft: "#EDEDF8",
+          50: "#EDEDF8",
+          100: "#D5D5F0",
+          600: "#3D3D99",
+          700: "#333380",
+        },
+        // 暖背景色
+        warm: {
+          bg: "#F7F5F0",
+          card: "#FFFFFF",
+          panel: "#F0EDE6",
+          sidebar: "#F3F0EA",
+        },
+        // 暖边框
+        "warm-border": "#DDD9D0",
+        "warm-border-light": "#E8E4DC",
+        // 暖文字
+        "text-warm": "#1C1C1A",
+        "text-warm-2": "#3D3D39",
+        "text-warm-3": "#6B6860",
+        "text-warm-4": "#9C9890",
+        // 语义色
+        amber: {
+          DEFAULT: "#B45C0A",
+          soft: "#FEF3E2",
+          line: "#F0A44A",
+          50: "#FEF3E2",
+          500: "#B45C0A",
+        },
+        // 基础 token（向下兼容）
+        border: "#DDD9D0",
+        background: "#F7F5F0",
+        foreground: "#1C1C1A",
         primary: {
-          DEFAULT: "hsl(221.2, 83.2%, 53.3%)",
-          foreground: "hsl(210, 40%, 98%)",
+          DEFAULT: "#2D6A4F",
+          foreground: "#FFFFFF",
         },
         secondary: {
-          DEFAULT: "hsl(210, 40%, 96.1%)",
-          foreground: "hsl(222.2, 47.4%, 11.2%)",
+          DEFAULT: "#F0EDE6",
+          foreground: "#3D3D39",
         },
         muted: {
-          DEFAULT: "hsl(210, 40%, 96.1%)",
-          foreground: "hsl(215.4, 16.3%, 46.9%)",
+          DEFAULT: "#F3F0EA",
+          foreground: "#6B6860",
         },
         accent: {
-          DEFAULT: "hsl(210, 40%, 96.1%)",
-          foreground: "hsl(222.2, 47.4%, 11.2%)",
+          DEFAULT: "#EAF4EE",
+          foreground: "#2D6A4F",
         },
         destructive: {
-          DEFAULT: "hsl(0, 84.2%, 60.2%)",
-          foreground: "hsl(210, 40%, 98%)",
+          DEFAULT: "#9B2020",
+          foreground: "#FDEAEA",
         },
         success: {
-          DEFAULT: "hsl(142.1, 76.2%, 36.3%)",
-          foreground: "hsl(355.7, 100%, 97.3%)",
+          DEFAULT: "#2D6A4F",
+          foreground: "#EAF4EE",
         },
         warning: {
-          DEFAULT: "hsl(47.9, 95.8%, 53.1%)",
-          foreground: "hsl(26, 83.3%, 14.1%)",
+          DEFAULT: "#B45C0A",
+          foreground: "#FEF3E2",
         },
+      },
+      borderRadius: {
+        DEFAULT: "4px",
+        sm: "3px",
+        md: "4px",
+        lg: "4px",
+        xl: "6px",
+        "2xl": "8px",
+        full: "99px",
+      },
+      boxShadow: {
+        sm: "0 1px 3px rgba(28,28,26,0.06)",
+        DEFAULT: "0 1px 3px rgba(28,28,26,0.06)",
+        md: "0 3px 10px rgba(28,28,26,0.08)",
+        lg: "0 6px 20px rgba(28,28,26,0.10)",
       },
     },
   },

@@ -15,23 +15,29 @@ interface ChapterResult {
 
 export async function POST(request: NextRequest) {
   try {
-    const { results } = await request.json() as { results: ChapterResult[] };
+    const { results, project_id } = await request.json() as { results: ChapterResult[]; project_id?: string };
+    const projectId = project_id || 'default';
 
     // Merge with SQLite edits
     let editsMap: Map<string, { content: string }>;
     try {
-      const edits = getAllEdits();
+      const edits = getAllEdits(projectId);
       editsMap = new Map(edits.filter(e => e.content).map(e => [e.id, { content: e.content }]));
     } catch {
       editsMap = new Map();
     }
 
+    // 从 projectId 推导企业名和年份
+    const lastUnderscore = projectId.lastIndexOf('_');
+    const companyName = lastUnderscore > 0 ? projectId.substring(0, lastUnderscore) : projectId;
+    const reportYear = lastUnderscore > 0 ? projectId.substring(lastUnderscore + 1) : '';
+
     // Filter to generated/reviewed/approved chapters
     const chapters = results.filter(r => (r.status === 'generated' || r.status === 'reviewed' || r.status === 'approved') && r.draft);
 
     // Build markdown content
-    let markdown = `# 江苏艾森半导体材料股份有限公司\n\n`;
-    markdown += `## 2025年度环境、社会及公司治理（ESG）报告\n\n`;
+    let markdown = `# ${companyName}\n\n`;
+    markdown += `## ${reportYear ? reportYear + '年度' : ''}环境、社会及公司治理（ESG）报告\n\n`;
     markdown += `---\n\n`;
 
     // Table of contents
@@ -93,7 +99,8 @@ export async function POST(request: NextRequest) {
 
     // Return as downloadable file
     // filename 用 ASCII 兜底，filename* 用 UTF-8 编码支持中文
-    const encodedName = encodeURIComponent('艾森股份2025ESG报告.md');
+    const exportFileName = `${companyName}${reportYear}ESG报告.md`;
+    const encodedName = encodeURIComponent(exportFileName);
     return new NextResponse(buffer, {
       headers: {
         'Content-Type': 'text/markdown; charset=utf-8',

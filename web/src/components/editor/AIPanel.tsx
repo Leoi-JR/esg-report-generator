@@ -16,8 +16,9 @@ import {
   Loader2,
   Send,
   Trash2,
+  Paperclip,
+  FolderOpen,
 } from 'lucide-react';
-import { cn } from '@/lib/utils';
 
 export const AIPanel: React.FC = () => {
   const {
@@ -28,11 +29,11 @@ export const AIPanel: React.FC = () => {
     selectedChapterId,
     tiptapEditor,
     setShowAIPanel,
+    activeProject,
   } = useEditorStore();
 
   const [isLoading, setIsLoading] = useState(false);
   const [aiResponse, setAiResponse] = useState<string>('');
-  const [aiHistoryId, setAiHistoryId] = useState<number | null>(null);
   const [currentAction, setCurrentAction] = useState<AIAction | null>(null);
   const [customPrompt, setCustomPrompt] = useState('');
   const [uploadedFiles, setUploadedFiles] = useState<UploadedFile[]>([]);
@@ -56,6 +57,7 @@ export const AIPanel: React.FC = () => {
       const endpoint = `/api/ai/${action}`;
       const body: Record<string, unknown> = {
         chapter_id: selectedChapterId,
+        project_id: activeProject || 'default',
         selected_text: aiSelectedText,
         source_texts: sourceTexts,
         uploaded_file_ids: uploadedFileIds,
@@ -75,7 +77,6 @@ export const AIPanel: React.FC = () => {
       if (resp.ok) {
         const data = await resp.json();
         setAiResponse(data.text);
-        setAiHistoryId(data.ai_history_id);
       } else {
         const err = await resp.json();
         setAiResponse(`错误：${err.error || 'AI 调用失败'}`);
@@ -86,27 +87,19 @@ export const AIPanel: React.FC = () => {
     } finally {
       setIsLoading(false);
     }
-  }, [selectedChapterId, aiSelectedText, currentSources, selectedSourceIds, uploadedFiles]);
+  }, [selectedChapterId, aiSelectedText, currentSources, selectedSourceIds, uploadedFiles, activeProject]);
 
-  /**
-   * 将 AI 返回的文本转换为 Tiptap 兼容的 HTML 并插入编辑器。
-   * 使用 textToBlockHTML 确保 [来源X] 被正确渲染为可点击角标，
-   * 且段落结构和行距与现有内容保持一致。
-   */
   const insertAIContent = useCallback((text: string, mode: 'replace' | 'append') => {
     if (!tiptapEditor || !text) return;
 
-    // 将纯文本转换为带段落结构的 HTML（处理 [来源X] 等标记）
     const html = textToBlockHTML(text);
 
     if (mode === 'append') {
-      // 续写：在当前光标位置后追加
       const { to } = tiptapEditor.state.selection;
       tiptapEditor.chain().focus().insertContentAt(to, html, {
         parseOptions: { preserveWhitespace: false }
       }).run();
     } else {
-      // 替换：删除选中内容并插入新内容
       tiptapEditor.chain().focus().deleteSelection().insertContent(html, {
         parseOptions: { preserveWhitespace: false }
       }).run();
@@ -121,25 +114,13 @@ export const AIPanel: React.FC = () => {
     } else if (currentAction === 'polish' || currentAction === 'freeform') {
       insertAIContent(aiResponse, 'replace');
     }
-    // verify 操作不替换任何内容
-
-    // 记录采纳（非关键操作）
-    if (aiHistoryId) {
-      fetch('/api/ai/accept', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ id: aiHistoryId, accepted: 1 }),
-      }).catch(() => {});
-    }
 
     setAiResponse('');
-    setAiHistoryId(null);
     setCurrentAction(null);
-  }, [tiptapEditor, aiResponse, currentAction, aiHistoryId, selectedChapterId, insertAIContent]);
+  }, [tiptapEditor, aiResponse, currentAction, selectedChapterId, insertAIContent]);
 
   const handleReject = useCallback(() => {
     setAiResponse('');
-    setAiHistoryId(null);
     setCurrentAction(null);
   }, []);
 
@@ -178,68 +159,125 @@ export const AIPanel: React.FC = () => {
   const handleClose = useCallback(() => {
     setShowAIPanel(false);
     setAiResponse('');
-    setAiHistoryId(null);
     setCurrentAction(null);
   }, [setShowAIPanel]);
 
   return (
-    <div className="h-full flex flex-col bg-white">
+    <div style={{
+      height: '100%',
+      display: 'flex',
+      flexDirection: 'column',
+      background: 'var(--bg-card)',
+      fontFamily: 'var(--font-body)',
+    }}>
       {/* Header */}
-      <div className="flex items-center justify-between px-4 py-3 border-b border-gray-200 bg-gradient-to-r from-purple-50 to-white flex-shrink-0">
-        <div className="flex items-center gap-2">
-          <Sparkles size={18} className="text-purple-600" />
-          <h3 className="font-medium text-gray-700">AI 助手</h3>
+      <div style={{
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        height: '40px',
+        padding: '0 12px',
+        borderBottom: '1px solid var(--border)',
+        background: 'var(--bg-warm)',
+        flexShrink: 0,
+        boxSizing: 'border-box',
+      }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+          <Sparkles size={14} style={{ color: 'var(--indigo)' }} />
+          <span style={{
+            fontFamily: 'var(--font-head)',
+            fontSize: '12px',
+            fontWeight: 600,
+            color: 'var(--text-1)',
+          }}>
+            AI 助手
+          </span>
         </div>
         <button
           onClick={handleClose}
-          className="p-1 hover:bg-gray-100 rounded transition-colors"
+          style={{
+            padding: '4px',
+            background: 'none',
+            border: 'none',
+            cursor: 'pointer',
+            color: 'var(--text-4)',
+            borderRadius: 'var(--radius-sm)',
+            display: 'flex',
+            alignItems: 'center',
+            transition: 'background 0.15s, color 0.15s',
+          }}
+          onMouseEnter={e => { (e.currentTarget as HTMLButtonElement).style.background = 'var(--border-light)'; (e.currentTarget as HTMLButtonElement).style.color = 'var(--text-1)'; }}
+          onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.background = 'none'; (e.currentTarget as HTMLButtonElement).style.color = 'var(--text-4)'; }}
         >
-          <X size={18} className="text-gray-500" />
+          <X size={16} />
         </button>
       </div>
 
-      <div className="flex-1 overflow-y-auto">
-        {/* Selected Text */}
-        {aiSelectedText && (
-          <div className="px-4 py-3 border-b border-gray-100">
-            <div className="text-xs text-gray-500 mb-1 font-medium">选中文本：</div>
-            <div className="text-sm text-gray-700 bg-gray-50 p-2 rounded max-h-24 overflow-y-auto leading-relaxed">
+      <div style={{ flex: 1, overflowY: 'auto' }}>
+
+        {/* 选中文本预览 */}
+        {aiSelectedText ? (
+          <div style={{ padding: '10px 12px', borderBottom: '1px solid var(--border-light)' }}>
+            <div style={{ fontSize: '11px', color: 'var(--text-4)', marginBottom: '5px', fontWeight: 500 }}>
+              选中文本
+            </div>
+            <div style={{
+              fontSize: '12px',
+              color: 'var(--text-2)',
+              background: 'var(--bg-warm)',
+              border: '1px solid var(--border-light)',
+              borderRadius: 'var(--radius)',
+              padding: '7px 10px',
+              maxHeight: '80px',
+              overflowY: 'auto',
+              lineHeight: 1.7,
+            }}>
               {aiSelectedText.slice(0, 500)}
               {aiSelectedText.length > 500 && '...'}
             </div>
           </div>
-        )}
-
-        {!aiSelectedText && (
-          <div className="px-4 py-6 text-center text-gray-400 text-sm">
+        ) : (
+          <div style={{ padding: '24px 12px', textAlign: 'center', color: 'var(--text-4)', fontSize: '12px' }}>
             请在编辑器中选中文本以使用 AI 助手
           </div>
         )}
 
-        {/* Source Selection */}
+        {/* 参考来源勾选 */}
         {aiSelectedText && currentSources.length > 0 && (
-          <div className="px-4 py-3 border-b border-gray-100">
-            <div className="text-xs text-gray-500 mb-2 font-medium flex items-center gap-1">
-              📎 参考来源（勾选作为 AI 上下文）：
+          <div style={{ padding: '10px 12px', borderBottom: '1px solid var(--border-light)' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '5px', fontSize: '11px', color: 'var(--text-4)', fontWeight: 500, marginBottom: '7px' }}>
+              <Paperclip size={11} />
+              参考来源（勾选作为 AI 上下文）
             </div>
-            <div className="space-y-1.5 max-h-40 overflow-y-auto">
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', maxHeight: '140px', overflowY: 'auto' }}>
               {currentSources.map(source => (
                 <label
                   key={source.id}
-                  className="flex items-start gap-2 text-xs cursor-pointer hover:bg-gray-50 p-1 rounded"
+                  style={{
+                    display: 'flex',
+                    alignItems: 'flex-start',
+                    gap: '7px',
+                    fontSize: '11px',
+                    cursor: 'pointer',
+                    padding: '4px 6px',
+                    borderRadius: 'var(--radius-sm)',
+                    transition: 'background 0.12s',
+                  }}
+                  onMouseEnter={e => (e.currentTarget.style.background = 'var(--bg-warm)')}
+                  onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
                 >
                   <input
                     type="checkbox"
                     checked={selectedSourceIds.has(source.id)}
                     onChange={() => toggleSourceSelection(source.id)}
-                    className="mt-0.5 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                    style={{ marginTop: '1px', accentColor: 'var(--green)' }}
                   />
-                  <div className="flex-1 min-w-0">
-                    <span className="text-gray-700 font-medium">[{source.id}]</span>
-                    <span className="text-gray-500 ml-1 truncate">
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <span style={{ fontWeight: 600, color: 'var(--text-2)' }}>[{source.id}]</span>
+                    <span style={{ color: 'var(--text-3)', marginLeft: '4px' }}>
                       {source.file_name} p.{source.page}
                     </span>
-                    <span className="text-gray-400 ml-1">
+                    <span style={{ color: 'var(--text-4)', marginLeft: '4px' }}>
                       ({(source.score * 100).toFixed(0)}%)
                     </span>
                   </div>
@@ -249,39 +287,73 @@ export const AIPanel: React.FC = () => {
           </div>
         )}
 
-        {/* Upload Section */}
+        {/* 补充资料上传 */}
         {aiSelectedText && (
-          <div className="px-4 py-3 border-b border-gray-100">
-            <div className="text-xs text-gray-500 mb-2 font-medium">📁 补充资料：</div>
+          <div style={{ padding: '10px 12px', borderBottom: '1px solid var(--border-light)' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '5px', fontSize: '11px', color: 'var(--text-4)', fontWeight: 500, marginBottom: '7px' }}>
+              <FolderOpen size={11} />
+              补充资料
+            </div>
             <input
               ref={fileInputRef}
               type="file"
               accept=".pdf,.docx,.txt,.xlsx"
               onChange={handleUpload}
-              className="hidden"
+              style={{ display: 'none' }}
             />
             <button
               onClick={() => fileInputRef.current?.click()}
               disabled={isUploading}
-              className="flex items-center gap-1 px-3 py-1.5 text-xs text-gray-600 border border-gray-200 rounded hover:bg-gray-50 transition-colors disabled:opacity-50"
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '5px',
+                padding: '4px 10px',
+                fontSize: '11px',
+                color: 'var(--text-2)',
+                background: 'transparent',
+                border: '1px solid var(--border)',
+                borderRadius: 'var(--radius)',
+                cursor: isUploading ? 'not-allowed' : 'pointer',
+                fontFamily: 'var(--font-body)',
+                opacity: isUploading ? 0.6 : 1,
+                transition: 'background 0.15s',
+              }}
+              onMouseEnter={e => { if (!isUploading) (e.currentTarget as HTMLButtonElement).style.background = 'var(--bg-warm)'; }}
+              onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.background = 'transparent'; }}
             >
-              {isUploading ? (
-                <Loader2 size={12} className="animate-spin" />
-              ) : (
-                <Upload size={12} />
-              )}
+              {isUploading ? <Loader2 size={11} className="animate-spin" /> : <Upload size={11} />}
               上传文件
             </button>
             {uploadedFiles.length > 0 && (
-              <div className="mt-2 space-y-1">
+              <div style={{ marginTop: '6px', display: 'flex', flexDirection: 'column', gap: '3px' }}>
                 {uploadedFiles.map(f => (
-                  <div key={f.id} className="flex items-center gap-2 text-xs text-gray-600 bg-gray-50 p-1.5 rounded">
-                    <span className="truncate flex-1">{f.file_name}</span>
+                  <div key={f.id} style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '6px',
+                    fontSize: '11px',
+                    color: 'var(--text-3)',
+                    background: 'var(--bg-warm)',
+                    border: '1px solid var(--border-light)',
+                    padding: '4px 8px',
+                    borderRadius: 'var(--radius-sm)',
+                  }}>
+                    <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      {f.file_name}
+                    </span>
                     <button
                       onClick={() => setUploadedFiles(prev => prev.filter(x => x.id !== f.id))}
-                      className="text-gray-400 hover:text-red-500 transition-colors"
+                      style={{
+                        background: 'none', border: 'none', cursor: 'pointer',
+                        color: 'var(--text-4)', padding: '1px',
+                        display: 'flex', alignItems: 'center',
+                        transition: 'color 0.15s',
+                      }}
+                      onMouseEnter={e => (e.currentTarget.style.color = 'var(--red)')}
+                      onMouseLeave={e => (e.currentTarget.style.color = 'var(--text-4)')}
                     >
-                      <Trash2 size={12} />
+                      <Trash2 size={11} />
                     </button>
                   </div>
                 ))}
@@ -290,55 +362,81 @@ export const AIPanel: React.FC = () => {
           </div>
         )}
 
-        {/* Action Buttons */}
+        {/* 操作按钮组 */}
         {aiSelectedText && (
-          <div className="px-4 py-3 border-b border-gray-100">
-            <div className="flex items-center gap-2">
+          <div style={{ padding: '10px 12px', borderBottom: '1px solid var(--border-light)' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
+              {/* 润色 — indigo 实色（最重要操作） */}
               <button
                 onClick={() => callAI('polish')}
                 disabled={isLoading}
-                className={cn(
-                  'flex items-center gap-1 px-3 py-1.5 text-xs font-medium rounded-lg transition-colors',
-                  'bg-purple-50 text-purple-700 hover:bg-purple-100 disabled:opacity-50'
-                )}
+                style={{
+                  display: 'flex', alignItems: 'center', gap: '4px',
+                  padding: '4px 10px', fontSize: '11px', fontWeight: 500,
+                  background: 'var(--indigo)', color: '#fff',
+                  border: '1px solid var(--indigo)',
+                  borderRadius: 'var(--radius)', cursor: isLoading ? 'not-allowed' : 'pointer',
+                  fontFamily: 'var(--font-body)', opacity: isLoading ? 0.5 : 1,
+                  transition: 'background 0.15s',
+                }}
+                onMouseEnter={e => { if (!isLoading) (e.currentTarget as HTMLButtonElement).style.background = 'var(--indigo-hover)'; }}
+                onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.background = 'var(--indigo)'; }}
               >
-                <Sparkles size={12} />
+                <Sparkles size={11} />
                 润色
               </button>
+
+              {/* 续写 — indigo 中软色 */}
               <button
                 onClick={() => callAI('extend')}
                 disabled={isLoading}
-                className={cn(
-                  'flex items-center gap-1 px-3 py-1.5 text-xs font-medium rounded-lg transition-colors',
-                  'bg-blue-50 text-blue-700 hover:bg-blue-100 disabled:opacity-50'
-                )}
+                style={{
+                  display: 'flex', alignItems: 'center', gap: '4px',
+                  padding: '4px 10px', fontSize: '11px', fontWeight: 500,
+                  background: 'var(--indigo-mid)', color: 'var(--indigo)',
+                  border: '1px solid var(--indigo-mid-border)',
+                  borderRadius: 'var(--radius)', cursor: isLoading ? 'not-allowed' : 'pointer',
+                  fontFamily: 'var(--font-body)', opacity: isLoading ? 0.5 : 1,
+                  transition: 'background 0.15s',
+                }}
+                onMouseEnter={e => { if (!isLoading) (e.currentTarget as HTMLButtonElement).style.background = 'var(--indigo-line)'; }}
+                onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.background = 'var(--indigo-mid)'; }}
               >
-                <FileEdit size={12} />
+                <FileEdit size={11} />
                 续写
               </button>
+
+              {/* 核查 — indigo 最浅软色 */}
               <button
                 onClick={() => callAI('verify')}
                 disabled={isLoading}
-                className={cn(
-                  'flex items-center gap-1 px-3 py-1.5 text-xs font-medium rounded-lg transition-colors',
-                  'bg-amber-50 text-amber-700 hover:bg-amber-100 disabled:opacity-50'
-                )}
+                style={{
+                  display: 'flex', alignItems: 'center', gap: '4px',
+                  padding: '4px 10px', fontSize: '11px', fontWeight: 500,
+                  background: 'var(--indigo-soft)', color: 'var(--indigo)',
+                  border: '1px solid var(--indigo-line)',
+                  borderRadius: 'var(--radius)', cursor: isLoading ? 'not-allowed' : 'pointer',
+                  fontFamily: 'var(--font-body)', opacity: isLoading ? 0.5 : 1,
+                  transition: 'background 0.15s',
+                }}
+                onMouseEnter={e => { if (!isLoading) (e.currentTarget as HTMLButtonElement).style.background = 'var(--indigo-mid)'; }}
+                onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.background = 'var(--indigo-soft)'; }}
               >
-                <Search size={12} />
+                <Search size={11} />
                 核查
               </button>
             </div>
           </div>
         )}
 
-        {/* Freeform Input */}
+        {/* 自定义指令输入框 */}
         {aiSelectedText && (
-          <div className="px-4 py-3 border-b border-gray-100">
-            <div className="text-xs text-gray-500 mb-2 font-medium flex items-center gap-1">
-              <MessageSquare size={12} />
-              自定义指令：
+          <div style={{ padding: '10px 12px', borderBottom: '1px solid var(--border-light)' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '5px', fontSize: '11px', color: 'var(--text-4)', fontWeight: 500, marginBottom: '7px' }}>
+              <MessageSquare size={11} />
+              自定义指令
             </div>
-            <div className="flex items-center gap-2">
+            <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
               <input
                 type="text"
                 value={customPrompt}
@@ -350,57 +448,118 @@ export const AIPanel: React.FC = () => {
                   }
                 }}
                 placeholder="请输入你的要求..."
-                className="flex-1 px-3 py-1.5 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-500 focus:border-transparent"
+                style={{
+                  flex: 1,
+                  padding: '6px 10px',
+                  fontSize: '12px',
+                  fontFamily: 'var(--font-body)',
+                  border: '1px solid var(--border)',
+                  borderRadius: 'var(--radius)',
+                  background: 'var(--bg-card)',
+                  color: 'var(--text-1)',
+                  outline: 'none',
+                }}
+                onFocus={e => (e.currentTarget.style.borderColor = 'var(--indigo)')}
+                onBlur={e => (e.currentTarget.style.borderColor = 'var(--border)')}
               />
               <button
                 onClick={handleFreeformSubmit}
                 disabled={isLoading || !customPrompt.trim()}
-                className="p-1.5 text-purple-600 hover:bg-purple-50 rounded-lg transition-colors disabled:opacity-50"
+                style={{
+                  padding: '6px',
+                  color: customPrompt.trim() && !isLoading ? 'var(--indigo)' : 'var(--text-4)',
+                  background: 'none',
+                  border: 'none',
+                  borderRadius: 'var(--radius)',
+                  cursor: isLoading || !customPrompt.trim() ? 'not-allowed' : 'pointer',
+                  display: 'flex', alignItems: 'center',
+                  transition: 'background 0.15s',
+                }}
+                onMouseEnter={e => { if (customPrompt.trim() && !isLoading) (e.currentTarget as HTMLButtonElement).style.background = 'var(--indigo-soft)'; }}
+                onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.background = 'none'; }}
               >
-                <Send size={16} />
+                <Send size={15} />
               </button>
             </div>
           </div>
         )}
 
-        {/* AI Response */}
-        <div className="px-4 py-3">
-          <div className="text-xs text-gray-500 mb-2 font-medium">🤖 AI 回复：</div>
+        {/* AI 回复区域 */}
+        <div style={{ padding: '10px 12px' }}>
+          <div style={{ fontSize: '11px', color: 'var(--text-4)', fontWeight: 500, marginBottom: '7px' }}>
+            AI 回复
+          </div>
           {isLoading ? (
-            <div className="flex items-center gap-2 py-8 justify-center text-gray-400">
-              <Loader2 size={20} className="animate-spin" />
-              <span className="text-sm">AI 正在思考中...</span>
+            <div style={{
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+              gap: '8px', padding: '28px 0',
+              color: 'var(--text-3)', fontSize: '12px',
+            }}>
+              <Loader2 size={16} className="animate-spin" style={{ color: 'var(--indigo)' }} />
+              <span>AI 正在思考中...</span>
             </div>
           ) : aiResponse ? (
             <div>
-              <div className="text-sm text-gray-700 bg-gray-50 p-3 rounded-lg whitespace-pre-wrap max-h-60 overflow-y-auto leading-relaxed">
+              <div style={{
+                fontSize: '12px',
+                color: 'var(--text-2)',
+                background: 'var(--bg-warm)',
+                border: '1px solid var(--border-light)',
+                borderRadius: 'var(--radius)',
+                padding: '10px 12px',
+                whiteSpace: 'pre-wrap',
+                maxHeight: '220px',
+                overflowY: 'auto',
+                lineHeight: 1.75,
+                fontFamily: 'var(--font-body)',
+              }}>
                 {aiResponse}
               </div>
-              <div className="flex items-center gap-2 mt-3 justify-end">
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: '6px', marginTop: '10px' }}>
                 {currentAction !== 'verify' && (
                   <button
                     onClick={handleAccept}
-                    className="flex items-center gap-1 px-4 py-1.5 text-sm font-medium text-white bg-green-600 hover:bg-green-700 rounded-lg transition-colors"
+                    style={{
+                      display: 'flex', alignItems: 'center', gap: '4px',
+                      padding: '5px 12px', fontSize: '12px', fontWeight: 500,
+                      background: 'var(--green)', color: '#fff',
+                      border: 'none', borderRadius: 'var(--radius)',
+                      cursor: 'pointer', fontFamily: 'var(--font-body)',
+                      transition: 'background 0.15s',
+                    }}
+                    onMouseEnter={e => (e.currentTarget.style.background = 'var(--green-hover)')}
+                    onMouseLeave={e => (e.currentTarget.style.background = 'var(--green)')}
                   >
-                    <Check size={14} />
+                    <Check size={13} />
                     采纳
                   </button>
                 )}
                 <button
                   onClick={handleReject}
-                  className="flex items-center gap-1 px-4 py-1.5 text-sm font-medium text-gray-600 bg-gray-100 hover:bg-gray-200 rounded-lg transition-colors"
+                  style={{
+                    display: 'flex', alignItems: 'center', gap: '4px',
+                    padding: '5px 12px', fontSize: '12px', fontWeight: 500,
+                    background: 'var(--bg-warm)', color: 'var(--text-2)',
+                    border: '1px solid var(--border)',
+                    borderRadius: 'var(--radius)',
+                    cursor: 'pointer', fontFamily: 'var(--font-body)',
+                    transition: 'background 0.15s',
+                  }}
+                  onMouseEnter={e => (e.currentTarget.style.background = 'var(--border-light)')}
+                  onMouseLeave={e => (e.currentTarget.style.background = 'var(--bg-warm)')}
                 >
-                  <XCircle size={14} />
+                  <XCircle size={13} />
                   {currentAction === 'verify' ? '关闭' : '拒绝'}
                 </button>
               </div>
             </div>
           ) : aiSelectedText ? (
-            <div className="text-center py-6 text-gray-400 text-sm">
+            <div style={{ textAlign: 'center', padding: '24px 0', color: 'var(--text-4)', fontSize: '12px' }}>
               点击上方按钮开始 AI 操作
             </div>
           ) : null}
         </div>
+
       </div>
     </div>
   );

@@ -3,7 +3,7 @@ const nextConfig = {
   // Allow reading files from parent directory
   experimental: {
     serverActions: {
-      bodySizeLimit: '25mb',
+      bodySizeLimit: '3300mb',
     },
     serverComponentsExternalPackages: ['better-sqlite3'],
   },

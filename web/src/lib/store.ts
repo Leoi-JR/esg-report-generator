@@ -57,6 +57,19 @@ interface EditorStore {
   // Loading state
   isLoading: boolean;
   setIsLoading: (loading: boolean) => void;
+
+  // Project context (multi-enterprise support)
+  activeProject: string | undefined;
+  setActiveProject: (project: string | undefined) => void;
+
+  // Pipeline integration
+  pipelineRunCompleted: boolean;
+  setPipelineRunCompleted: (v: boolean) => void;
+  refreshDraftData: (clearEdits?: boolean) => Promise<void>;
+
+  // Single-chapter regeneration
+  isRegenerating: boolean;
+  regenerateChapter: (chapterId: string) => Promise<void>;
 }
 
 function buildTreeFromResults(results: ChapterResult[]): TreeNode[] {
@@ -399,4 +412,73 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
   },
 
   setIsLoading: (loading) => set({ isLoading: loading }),
+
+  // Project context
+  activeProject: undefined,
+  setActiveProject: (project) => set({ activeProject: project }),
+
+  // Pipeline integration
+  pipelineRunCompleted: false,
+  setPipelineRunCompleted: (v) => set({ pipelineRunCompleted: v }),
+  refreshDraftData: async (clearEdits = false) => {
+    try {
+      const { activeProject } = get();
+      const qs = activeProject ? `?project=${encodeURIComponent(activeProject)}` : '';
+
+      // 如果用户选择清除编辑，先调 API 清除 SQLite，再清空内存
+      if (clearEdits) {
+        await fetch(`/api/chapters/_all${qs}`, { method: 'DELETE' });
+        set({ chapterEdits: new Map() });
+      }
+
+      const [draftRes, chunksRes] = await Promise.all([
+        fetch(`/api/data/draft${qs}`),
+        fetch(`/api/data/chunks${qs}`),
+      ]);
+      if (draftRes.ok) {
+        const draftData = await draftRes.json();
+        get().setDraftResults(draftData);
+      }
+      if (chunksRes.ok) {
+        const chunksData = await chunksRes.json();
+        const allChunks: ChunkRecord[] = chunksData.chunks ?? [];
+        get().setChunksCache(allChunks);
+      }
+      set({ pipelineRunCompleted: false });
+    } catch (err) {
+      console.error('Failed to refresh draft data:', err);
+    }
+  },
+
+  // Single-chapter regeneration
+  isRegenerating: false,
+  regenerateChapter: async (chapterId: string) => {
+    const { activeProject, draftResults } = get();
+    set({ isRegenerating: true });
+    try {
+      const res = await fetch(`/api/chapters/${encodeURIComponent(chapterId)}/regenerate`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ project: activeProject }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.error || `HTTP ${res.status}`);
+      }
+      const { chapter } = data as { chapter: ChapterResult };
+      // 更新内存中的 draftResults（不写 chapter_edits，保留为 AI 生成状态）
+      if (draftResults) {
+        set({
+          draftResults: {
+            ...draftResults,
+            results: draftResults.results.map(r =>
+              r.id === chapterId ? { ...r, ...chapter } : r
+            ),
+          },
+        });
+      }
+    } finally {
+      set({ isRegenerating: false });
+    }
+  },
 }));
