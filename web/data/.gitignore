@@ -1,0 +1,7 @@
+# SQLite database (auto-created at runtime)
+esg_editor.db
+esg_editor.db-wal
+esg_editor.db-shm
+
+# Uploaded files
+uploads/

@@ -1,5 +1,7 @@
 # ── 数据目录（原始资料 + 处理缓存，体积大） ─────────────────────────────
+# 排除所有 data/ 目录，但 web/data/ 单独处理（见下方 Web 平台节）
 data/
+!web/data/
 
 # ── 多企业项目数据目录（各企业的 raw/ 和 processed/，体积大） ────────────
 # 仅忽略数据文件，projects/ 目录结构本身可提交（用于记录项目约定）
@@ -23,9 +25,10 @@ src/.progress/
 # ── Web 平台 ──────────────────────────────────────────────────────────────
 web/node_modules/
 web/.next/
-web/data/*.db
-web/data/*.db-shm
-web/data/*.db-wal
+# web/data/ 目录下的忽略规则由 web/data/.gitignore 管理
+# 保留目录占位符，确保新环境 clone 后 web/data/ 目录存在
+!web/data/.gitkeep
+!web/data/.gitignore
 
 # ── ChromaDB 向量数据库 ──────────────────────────────────────────────────
 .chroma_db/
