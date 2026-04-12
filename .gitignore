@@ -49,3 +49,4 @@ web/data/*.db-wal
 # ── 系统文件 ─────────────────────────────────────────────────────────────
 .DS_Store
 Thumbs.db
+web/tsconfig.tsbuildinfo
