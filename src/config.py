@@ -13,10 +13,19 @@ config.py
   - 只改本文件，extractors.py / align_evidence.py 自动生效
   - 各文件类型覆盖值设为 None 表示"继承全局"，无需每次都全部填写
   - 敏感值（API Key）通过环境变量传入，本文件只读取，不硬编码
+
+多企业支持：
+  - 使用 get_paths(project_dir=None) 获取 ProjectPaths 实例
+  - project_dir=None → 向后兼容模式（旧的 data/ 路径）
+  - project_dir="projects/企业名" → 新企业隔离模式
 """
 
 import os
+from dataclasses import dataclass
 from pathlib import Path
+
+from dotenv import load_dotenv
+load_dotenv()  # 加载仓库根 .env 文件到 os.environ
 
 # 项目根目录（config.py 在 src/ 下，向上一级即为根）
 _HERE = os.path.dirname(os.path.abspath(__file__))
@@ -88,39 +97,17 @@ SOFFICE_PPT_TIMEOUT = 120          # .ppt → .pptx 转换超时（秒）
 
 
 # ==============================================================================
-# 2.5  SDK PDF 提取参数（v2 路径：glmocr SDK 流水线）
+# 2.5  PDF 提取参数（v2 路径：智谱线上 layout_parsing API）
 # ==============================================================================
 
 # ── PDF 分流阈值（逐页检测）──────────────────────────────────────────────────
-# 任何一页有效字符 < PDF_PAGE_MIN_CHARS → 整文档走 SDK 路径
+# 任何一页有效字符 < PDF_PAGE_MIN_CHARS → 整文档走线上 OCR 路径
 PDF_PAGE_MIN_CHARS = int(os.environ.get("PDF_PAGE_MIN_CHARS", "30"))
 
 # ── 标题层级重建方式 ─────────────────────────────────────────────────────────
 # "rule" = 用编号模式正则推断层级（默认、快速、无额外依赖）
 # "llm"  = 用 LLM 推断层级（更准确，需 LLM API 可用）
 TITLE_REBUILD_MODE = os.environ.get("TITLE_REBUILD_MODE", "llm")
-
-# ── SDK 配置文件路径 ─────────────────────────────────────────────────────────
-SDK_CONFIG_PATH = os.environ.get("SDK_CONFIG_PATH",
-    str(Path(_HERE) / "sdk_config.yaml"))
-
-# ── SDK 实例复用 ─────────────────────────────────────────────────────────────
-# True = 单例模式，多文件复用同一 GlmOcr 实例（避免重复加载版面检测模型）
-# False = 每文件新建实例（仅调试用）
-SDK_REUSE_INSTANCE = True
-
-# ── PP-DocLayout-V3 版面检测 GPU ─────────────────────────────────────────────
-# "0" = GPU0（与 vLLM GLM-OCR 共享，版面检测模型较轻量）
-# "" = CPU 模式
-SDK_LAYOUT_DEVICE = os.environ.get("SDK_LAYOUT_DEVICE", "0")
-
-# ── SDK PDF 渲染 DPI ─────────────────────────────────────────────────────────
-# PDF 页面栅格化为图像的 DPI。影响版面检测精度和 OCR 质量。
-# 200 = 默认值（精度与速度的平衡点）
-# 300 = 更高精度（细小文字/密集表格），但解析时间约增加 50%-100%
-# 150 = 更快速度，适合文字清晰的文档
-# 此值同时用于 sdk_config.yaml 的 pdf_dpi 和 bbox 坐标转换
-SDK_PDF_DPI = int(os.environ.get("SDK_PDF_DPI", "200"))
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # 2.6  表格处理优化参数（Phase 1：结构分离 + 格式转换）
@@ -145,9 +132,6 @@ ENABLE_TABLE_SUMMARY = True
 # 表格前后上下文字数（从 parent_text 中提取，帮助 LLM 理解表格语义）
 TABLE_CONTEXT_CHARS = 300
 
-# 表格摘要缓存路径（按内容 SHA256 去重，避免重复调用 LLM）
-TABLE_SUMMARY_CACHE_PATH = os.path.join(_ROOT, "data/processed/table_summary_cache.json")
-
 # Reranker/LLM 上下文长度阈值（parent_text 超过此值时截取前后窗口）
 MAX_PARENT_LEN = 2000
 
@@ -162,40 +146,63 @@ TABLE_SUMMARY_CONCURRENCY = 20
 # 3. 服务配置（地址/模型从环境变量读取，本文件提供默认值）
 # ==============================================================================
 
-# ── GLM-OCR（本地 vLLM） ──────────────────────────────────────────────────────
-GLM_OCR_BASE_URL = os.environ.get("GLM_OCR_BASE_URL", "http://localhost:8080/v1")
-GLM_OCR_MODEL    = os.environ.get("GLM_OCR_MODEL",    "glm-ocr")
+# ── GLM-OCR（智谱线上 layout_parsing API，直接调用，无 GPU 依赖） ─────────
+ZHIPU_API_KEY      = os.environ.get("ZHIPU_API_KEY", "")
+ZHIPU_API_BASE_URL = os.environ.get("ZHIPU_API_BASE_URL",
+                                     "https://open.bigmodel.cn/api/paas/v4")
+GLM_OCR_MODEL      = os.environ.get("GLM_OCR_MODEL", "glm-ocr")
 
-# ── Embedding API（本地 Qwen3-Embedding-8B，由 src/embedding_server.py 提供）──
-# 服务启动命令：CUDA_VISIBLE_DEVICES=1 conda run -n bge python3 src/embedding_server.py
-OPENAI_API_KEY  = os.environ.get("OPENAI_API_KEY",  "local")
-OPENAI_BASE_URL = os.environ.get("OPENAI_BASE_URL", "http://localhost:8081/v1")
-EMBEDDING_MODEL = os.environ.get("EMBEDDING_MODEL", "Qwen3-Embedding-8B")
+# ── Embedding API（DashScope text-embedding-v4，compute_embeddings() 直接调用 SDK）──
+DASHSCOPE_API_KEY = os.environ.get("DASHSCOPE_API_KEY", "")
+OPENAI_API_KEY    = os.environ.get("OPENAI_API_KEY", DASHSCOPE_API_KEY or "local")  # 兼容保留
+OPENAI_BASE_URL   = os.environ.get("OPENAI_BASE_URL", "http://localhost:8081/v1")   # 兼容保留
+EMBEDDING_MODEL   = os.environ.get("EMBEDDING_MODEL", "text-embedding-v4")
+EMBEDDING_DIM     = int(os.environ.get("EMBEDDING_DIM", "2048"))
+EMBEDDING_BATCH_SIZE = int(os.environ.get("EMBEDDING_BATCH_SIZE", "10"))
+# DashScope RPS=30，并发 20 留 10 余量避免触发限流
+EMBEDDING_CONCURRENCY = int(os.environ.get("EMBEDDING_CONCURRENCY", "20"))
 
 # 指标 query embedding 的 instruct 前缀（仅 query 侧使用，document/chunk 侧不加）
-# 参考 Qwen3-Embedding 文档：query 侧加 instruct 可提升检索性能 1%-5%
-# 格式：f"Instruct: {EMBEDDING_INSTRUCT}\nQuery: {query_text}"
+# 调用端拼接格式：f"Instruct: {EMBEDDING_INSTRUCT}\nQuery: {query_text}"
+# compute_embeddings() 自动解析此前缀，转为 DashScope 的 text_type="query" + instruct 参数
 EMBEDDING_INSTRUCT = (
     "Given an ESG (Environmental, Social, Governance) indicator description, "
     "retrieve relevant document sections that provide evidence or data for this indicator"
 )
 
-# ── Reranker（本地 Qwen3-Reranker-8B，由 src/reranker_server.py 提供）────────
-# 服务启动命令：CUDA_VISIBLE_DEVICES=3 conda run -n ocr python3 src/reranker_server.py
+# ── Reranker（DashScope qwen3-rerank，generate_report_draft.py 直接调用 SDK）──
 RERANKER_BASE_URL = os.environ.get("RERANKER_BASE_URL", "http://localhost:8083")
-RERANKER_MODEL    = os.environ.get("RERANKER_MODEL",    "Qwen3-Reranker-8B")
+RERANKER_MODEL    = os.environ.get("RERANKER_MODEL",    "qwen3-rerank")
+# DashScope qwen3-rerank RPM=5400，并发 10 足够保守
+RERANKER_CONCURRENCY = int(os.environ.get("RERANKER_CONCURRENCY", "10"))
 
-# Reranker task instruction（英文，与 Qwen3-Reranker-8B 训练语言对齐）
+# Reranker task instruction（英文，DashScope qwen3-rerank 的 instruct 参数）
 RERANKER_INSTRUCT = (
     "Given a section title and description from an ESG report, "
     "retrieve relevant document passages that provide evidence, data, "
     "or content useful for writing that section"
 )
 
-# ── VLM 图片分类与描述（本地 vLLM Qwen3-VL，由 src/vlm_server.py 提供） ────
-# 服务启动命令：CUDA_VISIBLE_DEVICES=2 conda run -n ocr python3 src/vlm_server.py
-VLM_BASE_URL     = os.environ.get("VLM_BASE_URL", "http://localhost:8082/v1")
-VLM_MODEL        = os.environ.get("VLM_MODEL",    "qwen3-vl")
+# ── VLM 图片分类与描述（DashScope qwen3-vl-plus，直接调用 SDK，无 GPU 依赖）──
+VLM_MODEL = os.environ.get("VLM_MODEL", "qwen3-vl-plus")
+# DashScope qwen3-vl-plus RPM=3000，并发 10 保守够用
+VLM_CONCURRENCY = int(os.environ.get("VLM_CONCURRENCY", "10"))
+
+# ── 智谱 OCR 并发控制（layout_parsing API，未公开限制，设保守值）──
+ZHIPU_OCR_CONCURRENCY = int(os.environ.get("ZHIPU_OCR_CONCURRENCY", "5"))
+
+# ── 阶段 2a 文件级提取并发数 ─────────────────────────────────────────────
+# 控制 align_evidence.py 阶段 2a 同时提取多少个文件。
+# 瓶颈在 VLM 图片处理和智谱 OCR 解析，文件级并发可显著缩短总时间。
+# 默认 5；内部 VLM/OCR 各有自己的并发限制（VLM_CONCURRENCY / ZHIPU_OCR_CONCURRENCY），
+# 文件级并发主要让多个文件的 API 调用能重叠等待。
+EXTRACT_CONCURRENCY = int(os.environ.get("EXTRACT_CONCURRENCY", "5"))
+
+# ── API 调用重试参数 ─────────────────────────────────────────────────────
+# 适用于 VLM 图片分类、智谱 OCR（PDF 级和图片级）
+# 指数退避：等待 base_delay * 2^attempt 秒（即 2s, 4s, 8s）
+API_MAX_RETRIES   = int(os.environ.get("API_MAX_RETRIES", "3"))
+API_RETRY_BASE_DELAY = float(os.environ.get("API_RETRY_BASE_DELAY", "2.0"))
 
 # ── VLM 图片过滤与处理 ──────────────────────────────────────────────────────
 IMAGE_MIN_WIDTH  = 100    # 宽 < 此值跳过（排除图标/装饰元素）
@@ -233,32 +240,10 @@ CHROMA_PERSIST_DIR = os.path.join(_ROOT, ".chroma_db")
 # 若文件存在，build_indicator_queries() 优先使用增强文本；否则回退到原始公式。
 ENHANCED_QUERY_PATH = os.path.join(_ROOT, "data/processed/indicator_query_enhanced.json")
 
-# 阶段 2a 文本提取结果缓存（section 级别，提取完成后写入）
-# 修改分块逻辑后只需删除 chunks_cache.json，无需重新提取。
-SECTION_CACHE_PATH = os.path.join(_ROOT, "data/processed/sections_cache.json")
-
-# 阶段 2b 分块结果缓存文件路径（存放于 processed/ 目录）
-# 每次成功完成阶段 2b 后自动写入；下次运行时若文件存在则直接加载，跳过重新分块。
-CHUNK_CACHE_PATH = os.path.join(_ROOT, "data/processed/chunks_cache.json")
-
-# 阶段三 chunk embedding 缓存文件路径（numpy .npz 压缩格式）
-# 42418 × 4096 float 的 embedding 矩阵，.npz 压缩后 ~300-400 MB，加载仅需几秒。
-EMB_CACHE_PATH = os.path.join(_ROOT, "data/processed/chunks_emb_cache.npz")
 
 # VLM 图片分类结果缓存（按图片 SHA256 去重，避免重复调用 VLM）
 VLM_CACHE_PATH = os.path.join(_ROOT, "data/processed/vlm_cache.json")
 
-# SDK 提取的图片缓存目录（裁切的 image/chart 区域保存为 PNG，供后续 VLM 描述溯源）
-SDK_IMAGE_CACHE_DIR = os.path.join(_ROOT, "data/processed/sdk_images")
-
-# 设为 True 时强制重新提取所有文件，忽略已有缓存（sections + chunks + embedding 均失效）。
-# 适用场景：资料文件夹有新增/修改。
-FORCE_REEXTRACT = False
-
-# 设为 True 时强制重新分块（跳过 chunks_cache.json），但复用 sections_cache.json。
-# 适用场景：修改了 merge_short_sections / recursive_split 等分块参数后。
-# Phase 1 表格优化后需设为 True 一次，让 HTML → Markdown 转换生效。
-FORCE_RECHUNK = False
 
 
 # ==============================================================================
@@ -267,9 +252,9 @@ FORCE_RECHUNK = False
 
 # ── LLM API 配置 ──────────────────────────────────────────────────────────────
 # 注意：OpenAI SDK 要求 base_url 包含 /v1 后缀
-DRAFT_LLM_BASE_URL = os.environ.get("LLM_BASE_URL", "http://127.0.0.1:8000/v1")
-DRAFT_LLM_API_KEY  = os.environ.get("LLM_API_KEY",  "sk-leoi-888")
-DRAFT_LLM_MODEL    = os.environ.get("LLM_MODEL",    "deepseek-thinking")
+DRAFT_LLM_BASE_URL = os.environ.get("LLM_BASE_URL", "https://dashscope.aliyuncs.com/compatible-mode/v1")
+DRAFT_LLM_API_KEY  = os.environ.get("LLM_API_KEY") or os.environ.get("DASHSCOPE_API_KEY", "")
+DRAFT_LLM_MODEL    = os.environ.get("LLM_MODEL",    "deepseek-v3")
 
 # ── 并发与重试 ────────────────────────────────────────────────────────────────
 DRAFT_CONCURRENCY  = int(os.environ.get("DRAFT_CONCURRENCY", "6"))
@@ -298,3 +283,124 @@ BM25_TOP_N = 100
 
 # RRF 平滑参数（值越大，排名差异影响越小；60 是经验值）
 RRF_K = 60
+
+
+# ==============================================================================
+# 8. 多企业支持：ProjectPaths dataclass + get_paths() 工厂函数
+# ==============================================================================
+
+@dataclass
+class ProjectPaths:
+    """
+    一个企业项目目录对应的所有路径。
+
+    通过 get_paths(project_dir) 获取实例，不要直接构造。
+
+    目录约定（新模式，project_dir 非 None）：
+        {project_dir}/
+        ├── raw/
+        │   ├── ESG报告框架.xlsx        ← 每家企业独立一份
+        │   ├── 资料收集清单.xlsx        ← 固定文件名
+        │   └── 整理后资料/              ← 甲方整理后的文件
+        └── processed/                  ← 所有缓存和输出
+            ├── .chroma_db/             ← 向量库（隔离）
+            ├── sections_cache.json
+            ├── chunks_cache.json
+            ├── chunks_emb_cache.npz
+            ├── vlm_cache.json
+            ├── table_summary_cache.json
+            ├── indicator_query_enhanced.json
+            ├── framework_retrieval_queries.json
+            ├── 对齐表_YYYYMMDD.xlsx
+            ├── sdk_images/
+            └── report_draft/
+                ├── retrieval_results.json
+                └── draft_results.json
+    """
+    project_dir: Path
+    raw_dir: Path
+    processed_dir: Path
+    # ── 输入 ──────────────────────────────────────────────────────────────────
+    framework_xlsx: Path        # raw/ESG报告框架.xlsx
+    checklist_xlsx: Path        # raw/资料收集清单.xlsx
+    materials_dir: Path         # raw/整理后资料/
+    # ── 缓存 ──────────────────────────────────────────────────────────────────
+    section_cache: Path         # processed/sections_cache.json
+    chunk_cache: Path           # processed/chunks_cache.json
+    emb_cache: Path             # processed/chunks_emb_cache.npz
+    vlm_cache: Path             # processed/vlm_cache.json
+    table_summary_cache: Path   # processed/table_summary_cache.json
+    enhanced_query: Path        # processed/indicator_query_enhanced.json
+    chroma_dir: Path            # processed/.chroma_db/（新模式隔离；旧模式在项目根）
+    sdk_image_dir: Path         # processed/sdk_images/
+    # ── 中间产物 ──────────────────────────────────────────────────────────────
+    framework_queries: Path     # processed/framework_retrieval_queries.json
+    rq_progress: Path           # processed/_rq_progress.json
+    alignment_glob: str         # processed/对齐表_*.xlsx（glob 模式）
+    # ── 输出 ──────────────────────────────────────────────────────────────────
+    draft_output_dir: Path      # processed/report_draft/
+    retrieval_results: Path     # processed/report_draft/retrieval_results.json
+    draft_results: Path         # processed/report_draft/draft_results.json
+    # ── 共享（不隔离） ────────────────────────────────────────────────────────
+    jieba_dict: Path            # data/processed/esg_jieba_dict.txt（所有企业共用）
+
+
+def get_paths(project_dir=None) -> ProjectPaths:
+    """
+    获取项目路径对象。
+
+    Args:
+        project_dir: 企业项目目录（必传）。可以是：
+            - str / Path → 企业目录（绝对路径或相对项目根的相对路径）
+                           例如："projects/艾森股份_2025"
+
+    Returns:
+        ProjectPaths：包含该企业所有输入/输出/缓存路径的数据类实例。
+
+    Examples:
+        paths = get_paths("projects/艾森股份_2025")
+        paths = get_paths(Path("/absolute/path/to/project"))
+    """
+    root = Path(_ROOT)
+
+    if project_dir is None:
+        raise ValueError(
+            "project_dir is required. Legacy data/ mode has been removed.\n"
+            "Please pass --project-dir <path> (e.g. --project-dir projects/艾森股份_2025)"
+        )
+
+    pd = Path(project_dir)
+    if not pd.is_absolute():
+        pd = root / pd
+    pd = pd.resolve()
+    raw = pd / "raw"
+    proc = pd / "processed"
+    materials = raw / "整理后资料"
+    checklist_xlsx = raw / "资料收集清单.xlsx"
+    framework_xlsx = raw / "ESG报告框架.xlsx"
+    chroma_dir = proc / ".chroma_db"
+
+    return ProjectPaths(
+        project_dir=pd,
+        raw_dir=raw,
+        processed_dir=proc,
+        framework_xlsx=framework_xlsx,
+        checklist_xlsx=checklist_xlsx,
+        materials_dir=materials,
+        section_cache=proc / "sections_cache.json",
+        chunk_cache=proc / "chunks_cache.json",
+        emb_cache=proc / "chunks_emb_cache.npz",
+        vlm_cache=proc / "vlm_cache.json",
+        table_summary_cache=proc / "table_summary_cache.json",
+        enhanced_query=proc / "indicator_query_enhanced.json",
+        chroma_dir=chroma_dir,
+        sdk_image_dir=proc / "sdk_images",
+        framework_queries=proc / "framework_retrieval_queries.json",
+        rq_progress=proc / "_rq_progress.json",
+        alignment_glob=str(proc / "对齐表_*.xlsx"),
+        draft_output_dir=proc / "report_draft",
+        retrieval_results=proc / "report_draft" / "retrieval_results.json",
+        draft_results=proc / "report_draft" / "draft_results.json",
+        # BM25 jieba 词典领域通用，所有企业共享，不隔离
+        jieba_dict=root / "data" / "processed" / "esg_jieba_dict.txt",
+    )

@@ -39,7 +39,7 @@ SCANNED_PDF = os.path.join(
     "G-公司治理/GB-规范治理与党建/GB12/GB12-20231231审计报告扫描件.pdf"
 )
 
-GLM_OCR_BASE_URL = os.environ.get("GLM_OCR_BASE_URL", "http://localhost:8080/v1")
+GLM_OCR_SERVICE = "智谱线上 layout_parsing API"
 
 
 # ==============================================================================
@@ -91,7 +91,7 @@ def test_glmocr_connectivity():
     except Exception as e:
         raise AssertionError(
             f"call_glmocr() 抛出异常：{type(e).__name__}: {e}\n"
-            f"请确认 vLLM 服务已在 {GLM_OCR_BASE_URL} 启动，且模型名为 glm-ocr"
+            f"请确认 ZHIPU_API_KEY 已配置在 .env 中（{GLM_OCR_SERVICE}）"
         ) from e
 
     assert isinstance(result, str), \
@@ -139,7 +139,8 @@ def test_ocr_scanned_pdf():
     }
 
     try:
-        chunks = extract_pdf(file_record)
+        result = extract_pdf(file_record)
+        chunks = result["chunks"] if isinstance(result, dict) else result
     except Exception as e:
         raise AssertionError(
             f"extract_pdf() 抛出异常：{type(e).__name__}: {e}"
@@ -149,8 +150,8 @@ def test_ocr_scanned_pdf():
         f"期望至少 1 个 chunk，实际返回 {len(chunks)} 个"
 
     required_fields = ("chunk_id", "parent_id", "file_path", "file_name",
-                       "folder_code", "page_or_sheet", "chunk_index",
-                       "text", "parent_text", "char_count")
+                       "folder_code", "page_or_sheet",
+                       "text", "char_count")
     for c in chunks:
         for field in required_fields:
             assert field in c, f"chunk 缺少字段: {field}（chunk_id={c.get('chunk_id')}）"
@@ -184,7 +185,7 @@ if __name__ == "__main__":
 
     print("=" * 60)
     print("OCR 连通性测试")
-    print(f"服务地址：{GLM_OCR_BASE_URL}")
+    print(f"服务地址：{GLM_OCR_SERVICE}")
     print(f"扫描件：{os.path.basename(SCANNED_PDF)}")
     print("=" * 60)
     print()

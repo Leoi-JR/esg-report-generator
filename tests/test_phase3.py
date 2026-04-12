@@ -109,11 +109,10 @@ class TestBuildIndicatorQueries(unittest.TestCase):
         queries = build_indicator_queries(details)
         self.assertEqual(set(queries.keys()), set(details.keys()))
 
-    @patch("align_evidence.ENHANCED_QUERY_PATH", "/nonexistent/enhanced.json")
     def test_query_contains_code_topic_indicator(self):
         """每条查询文本应包含 code、topic、indicator 信息。"""
         details = _mock_indicator_details(n=3)
-        queries = build_indicator_queries(details)
+        queries = build_indicator_queries(details, enhanced_query_path="/nonexistent/enhanced.json")
         for code, query in queries.items():
             self.assertIn(code, query, f"查询文本应包含编码 {code}")
             self.assertIn(details[code]["topic"], query, f"查询文本应包含议题")
@@ -131,13 +130,12 @@ class TestBuildIndicatorQueries(unittest.TestCase):
             self.assertLessEqual(len(query), max_expected,
                                  f"查询文本超过预期上限，原始 requirement={len(req_full)} 字")
 
-    @patch("align_evidence.ENHANCED_QUERY_PATH", "/nonexistent/enhanced.json")
     def test_no_requirement_no_colon(self):
         """无 requirement 时，查询文本不应包含冒号占位。"""
         details = {
             "GC1": {"topic": "商业行为", "indicator": "反腐败", "requirement": ""}
         }
-        queries = build_indicator_queries(details)
+        queries = build_indicator_queries(details, enhanced_query_path="/nonexistent/enhanced.json")
         self.assertNotIn("：", queries["GC1"],
                          "无 requirement 时查询文本不应出现冒号")
         self.assertIn("GC1", queries["GC1"])
@@ -196,24 +194,30 @@ class TestComputeEmbeddings(unittest.TestCase):
         self.assertEqual(len(result), 7)
 
     def test_batch_splitting(self):
-        """批量分批逻辑：mock openai，验证分批调用次数。"""
+        """批量分批逻辑：mock DashScope TextEmbedding.call，验证分批调用次数。"""
         n_texts    = 7
         batch_size = 3  # 应分为 3 批：3 + 3 + 1
-        fake_emb   = [0.1] * 4  # 随意维度
+        fake_dim   = 4
+        fake_emb   = [0.1] * fake_dim
 
-        # compute_embeddings 在函数体内做 `from openai import OpenAI`，
-        # 所以 patch 目标是 openai.OpenAI
-        mock_client = MagicMock()
+        # compute_embeddings 在函数体内做 `import dashscope` 后调用
+        # dashscope.TextEmbedding.call()，返回 resp.output["embeddings"]
+        from http import HTTPStatus
 
-        def make_response(model, input, **kwargs):
+        call_count = [0]
+
+        def mock_call(**kwargs):
+            call_count[0] += 1
+            batch_input = kwargs.get("input", [])
             resp = MagicMock()
-            resp.data = [MagicMock(embedding=fake_emb) for _ in input]
+            resp.status_code = HTTPStatus.OK
+            resp.output = {
+                "embeddings": [{"embedding": fake_emb} for _ in batch_input]
+            }
             return resp
 
-        mock_client.embeddings.create.side_effect = make_response
-        mock_openai_cls = MagicMock(return_value=mock_client)
-
-        with patch("openai.OpenAI", mock_openai_cls):
+        with patch("dashscope.TextEmbedding.call", side_effect=mock_call), \
+             patch("dashscope.api_key", "fake-key"):
             texts  = [f"文本{i}" for i in range(n_texts)]
             result = compute_embeddings(
                 texts      = texts,
@@ -221,11 +225,12 @@ class TestComputeEmbeddings(unittest.TestCase):
                 base_url   = "http://fake",
                 model      = "test",
                 batch_size = batch_size,
+                max_concurrent = 1,  # 串行模式，便于计数验证
             )
 
         # 应调用 3 次（ceil(7/3)=3）
         expected_calls = (n_texts + batch_size - 1) // batch_size
-        self.assertEqual(mock_client.embeddings.create.call_count, expected_calls)
+        self.assertEqual(call_count[0], expected_calls)
         # 返回列表长度应与输入一致
         self.assertEqual(len(result), n_texts)
 

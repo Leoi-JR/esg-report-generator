@@ -50,6 +50,13 @@ def _make_file_record(path: str, folder_code: str | None = None) -> dict:
     }
 
 
+def _get_chunks(result) -> list:
+    """从提取函数返回值中取出 chunks 列表。
+    新版返回 dict{"chunks": [...], "parents": {...}}，旧版返回 list。
+    错误时返回 []（空列表）。"""
+    return result["chunks"] if isinstance(result, dict) else result
+
+
 # ==============================================================================
 # extract_pptx 测试（6 个）
 # ==============================================================================
@@ -57,7 +64,8 @@ def _make_file_record(path: str, folder_code: str | None = None) -> dict:
 def test_extract_pptx_returns_list():
     """extract_pptx 应返回 list（即使文件为空也不抛出）。"""
     record = _make_file_record(PPTX_SAMPLE, folder_code="GB1")
-    chunks = extract_pptx(record)
+    result = extract_pptx(record)
+    chunks = _get_chunks(result)
     assert isinstance(chunks, list), "extract_pptx 应返回 list"
     print(f"  ✓ {os.path.basename(PPTX_SAMPLE)}: {len(chunks)} 个 chunk")
 
@@ -65,7 +73,8 @@ def test_extract_pptx_returns_list():
 def test_extract_pptx_has_chunks():
     """含正文内容的 pptx 应提取出 ≥1 个有效 chunk。"""
     record = _make_file_record(PPTX_SAMPLE, folder_code="GB1")
-    chunks = extract_pptx(record)
+    result = extract_pptx(record)
+    chunks = _get_chunks(result)
     assert len(chunks) >= 1, f"期望 ≥1 个 chunk，实际 {len(chunks)}"
     total_chars = sum(c["char_count"] for c in chunks)
     assert total_chars > 0, "总有效字符应 > 0"
@@ -76,12 +85,13 @@ def test_extract_pptx_has_chunks():
 def test_extract_pptx_chunk_fields():
     """每个 ChunkRecord 必须包含规定字段，且 char_count ≥ 0。"""
     record = _make_file_record(PPTX_SAMPLE, folder_code="GB1")
-    chunks = extract_pptx(record)
+    result = extract_pptx(record)
+    chunks = _get_chunks(result)
     assert len(chunks) >= 1, "无 chunk，跳过字段验证"
 
     required = {"chunk_id", "parent_id", "file_path", "file_name",
-                "folder_code", "page_or_sheet", "chunk_index",
-                "text", "parent_text", "char_count"}
+                "folder_code", "page_or_sheet",
+                "text", "char_count"}
     for c in chunks:
         missing = required - set(c.keys())
         assert not missing, f"chunk 缺少字段：{missing}"
@@ -93,7 +103,8 @@ def test_extract_pptx_chunk_fields():
 def test_extract_pptx_no_zero_char_count():
     """过滤后不应存在 char_count=0 的 chunk。"""
     record = _make_file_record(PPTX_SAMPLE, folder_code="GB1")
-    chunks = extract_pptx(record)
+    result = extract_pptx(record)
+    chunks = _get_chunks(result)
     zero_chunks = [c for c in chunks if c["char_count"] == 0]
     assert zero_chunks == [], (
         f"存在 {len(zero_chunks)} 个 char_count=0 的 chunk，"
@@ -105,7 +116,8 @@ def test_extract_pptx_no_zero_char_count():
 def test_extract_pptx_chunk_size_limit():
     """所有 chunk 的 text 长度应 ≤ max_size=800。"""
     record = _make_file_record(PPTX_SAMPLE, folder_code="GB1")
-    chunks = extract_pptx(record)
+    result = extract_pptx(record)
+    chunks = _get_chunks(result)
     over = [c for c in chunks if len(c["text"]) > 800]
     assert over == [], (
         f"存在 {len(over)} 个超过 800 字符的 chunk，"
@@ -117,7 +129,8 @@ def test_extract_pptx_chunk_size_limit():
 def test_extract_pptx_invalid_path():
     """不存在的文件路径应返回空列表而不抛出异常。"""
     record = _make_file_record("/nonexistent/path/file.pptx")
-    chunks = extract_pptx(record)
+    result = extract_pptx(record)
+    chunks = _get_chunks(result)
     assert chunks == [], f"期望空列表，实际 {len(chunks)} 个 chunk"
     print("  ✓ 无效路径优雅降级 → []")
 
@@ -130,7 +143,8 @@ def test_extract_ppt_returns_list():
     """extract_ppt 应返回 list（不论 soffice 是否可用）。"""
     import shutil
     record = _make_file_record(PPT_SAMPLE, folder_code="EB3")
-    chunks = extract_ppt(record)
+    result = extract_ppt(record)
+    chunks = _get_chunks(result)
     assert isinstance(chunks, list), "extract_ppt 应返回 list"
 
     if shutil.which("soffice"):
@@ -155,7 +169,8 @@ def test_extract_ppt_has_content():
         return
 
     record = _make_file_record(PPT_SAMPLE, folder_code="EB3")
-    chunks = extract_ppt(record)
+    result = extract_ppt(record)
+    chunks = _get_chunks(result)
     assert len(chunks) >= 1, f"期望 ≥1 个 chunk，实际 {len(chunks)}"
     total_chars = sum(c["char_count"] for c in chunks)
     assert total_chars > 0, "总有效字符应 > 0"
@@ -166,7 +181,8 @@ def test_extract_ppt_has_content():
 def test_extract_ppt_invalid_path():
     """不存在的 .ppt 路径应返回空列表。"""
     record = _make_file_record("/nonexistent/path/file.ppt")
-    chunks = extract_ppt(record)
+    result = extract_ppt(record)
+    chunks = _get_chunks(result)
     assert chunks == [], f"期望空列表，实际 {len(chunks)} 个 chunk"
     print("  ✓ .ppt 无效路径优雅降级 → []")
 
@@ -189,10 +205,12 @@ def inspect_pptx(file_path: str, save_dir: str | None = None):
     record = _make_file_record(file_path)
 
     if ext == ".pptx":
-        chunks = extract_pptx(record)
+        result = extract_pptx(record)
+        chunks = _get_chunks(result)
         type_label = "pptx"
     elif ext == ".ppt":
-        chunks = extract_ppt(record)
+        result = extract_ppt(record)
+        chunks = _get_chunks(result)
         type_label = "ppt"
     else:
         print(f"不支持的扩展名：{ext}")

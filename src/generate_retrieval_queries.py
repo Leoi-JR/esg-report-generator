@@ -35,12 +35,17 @@ import argparse
 import json
 import os
 import sys
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 import threading
 
+from dotenv import load_dotenv
+load_dotenv()  # 加载仓库根 .env 文件
+
 import openpyxl
 from openai import OpenAI
+from progress_tracker import get_tracker
 
 # ── 路径配置 ──────────────────────────────────────────────────────────────────
 _HERE = Path(__file__).resolve().parent
@@ -55,13 +60,16 @@ PROMPT_BASE_QUERY = PROMPT_DIR / "retrieval_query_base.txt"
 PROMPT_HYDE = PROMPT_DIR / "retrieval_query_hyde.txt"
 
 # ── LLM 配置 ──────────────────────────────────────────────────────────────────
-LLM_BASE_URL = os.environ.get("LLM_BASE_URL", "http://127.0.0.1:8000")
-LLM_API_KEY = os.environ.get("LLM_API_KEY", "sk-leoi-888")
-DEFAULT_MODEL = "deepseek-thinking"
+LLM_BASE_URL = os.environ.get("LLM_BASE_URL", "https://dashscope.aliyuncs.com/compatible-mode/v1")
+LLM_API_KEY = os.environ.get("LLM_API_KEY") or os.environ.get("DASHSCOPE_API_KEY", "")
+DEFAULT_MODEL = "deepseek-v3"
 
 # ── LLM 调用参数 ──────────────────────────────────────────────────────────────
 LLM_MAX_TOKENS = 8192  # 最大输出 token 数
 LLM_TEMPERATURE = 0.3  # 生成温度
+LLM_TIMEOUT = float(os.environ.get("LLM_TIMEOUT", "180"))  # 单次请求超时（秒）
+LLM_CALL_RETRIES = 3   # 单次 call_llm 内部重试次数（网络/超时）
+LLM_RETRY_DELAY = 5    # 重试间隔（秒）
 
 # ── 并发配置 ──────────────────────────────────────────────────────────────────
 MAX_CONCURRENT_REQUESTS = 6  # 最大并发数
@@ -257,24 +265,27 @@ def print_progress(message: str, flush: bool = True):
 def call_llm(client: OpenAI, model: str, user_prompt: str) -> str | None:
     """
     调用 LLM，返回文本内容。失败返回 None。
-    调试阶段：不重试，失败立即返回。
-
-    Args:
-        user_prompt: 完整的用户提示词（包含指令 + 任务）
+    内置重试逻辑：网络错误/超时自动重试 LLM_CALL_RETRIES 次。
     """
-    try:
-        resp = client.chat.completions.create(
-            model=model,
-            max_tokens=LLM_MAX_TOKENS,
-            temperature=LLM_TEMPERATURE,
-            messages=[
-                {"role": "user", "content": user_prompt},
-            ],
-        )
-        return resp.choices[0].message.content
-    except Exception as e:
-        print_progress(f"    [LLM] 调用失败: {e}")
-        return None
+    for attempt in range(LLM_CALL_RETRIES):
+        try:
+            resp = client.chat.completions.create(
+                model=model,
+                max_tokens=LLM_MAX_TOKENS,
+                temperature=LLM_TEMPERATURE,
+                messages=[
+                    {"role": "user", "content": user_prompt},
+                ],
+            )
+            return resp.choices[0].message.content
+        except Exception as e:
+            if attempt < LLM_CALL_RETRIES - 1:
+                delay = LLM_RETRY_DELAY * (attempt + 1)
+                print_progress(f"    [LLM] 调用失败: {e}，{delay}s 后重试 ({attempt + 1}/{LLM_CALL_RETRIES})")
+                time.sleep(delay)
+            else:
+                print_progress(f"    [LLM] 调用失败（已重试 {LLM_CALL_RETRIES} 次）: {e}")
+                return None
 
 
 def parse_json_response(text: str) -> list[dict] | None:
@@ -316,6 +327,7 @@ def process_batch(
     raw_cache: dict[str, str] | None = None,
     debug_mode: bool = True,
     context_nodes: list[dict] | None = None,
+    progress_dir: Path | None = None,
 ) -> tuple[dict[str, str], list[dict]]:
     """
     处理一个批次：调用 LLM，解析返回，校验 id 匹配。
@@ -386,7 +398,7 @@ def process_batch(
     # 所有重试都失败
     if debug_mode:
         # 调试模式：保存原始返回到文件并抛出异常
-        debug_file = PROGRESS_JSON.parent / f"_debug_parse_error_{batch_name}.txt"
+        debug_file = (progress_dir or PROGRESS_JSON.parent) / f"_debug_parse_error_{batch_name}.txt"
         with open(debug_file, "w", encoding="utf-8") as f:
             f.write(f"批次名: {batch_name}\n")
             f.write(f"节点数: {len(batch)}\n")
@@ -413,6 +425,7 @@ def run_generation_phase(
     phase_name: str,
     save_progress_callback=None,
     debug_mode: bool = True,
+    progress_dir: Path | None = None,
 ) -> dict[str, str]:
     """
     运行一个生成阶段（基础查询或假设文档），支持并发处理。
@@ -476,28 +489,31 @@ def run_generation_phase(
 
     if not pending_batches:
         print_progress(f"  所有批次已完成，跳过")
-        return result_map
+        return result_map, []
 
     print_progress(f"  待处理批次: {len(pending_batches)}")
 
     # 并发处理函数
+    all_failed: list[dict] = []
+
     def process_one_batch(batch_info):
         batch_name, batch_nodes, context_nodes = batch_info
-        success, _ = process_batch(
+        success, failed = process_batch(
             client, model, batch_nodes, batch_name, instruction_prompt, field_name,
-            None, debug_mode, context_nodes
+            None, debug_mode, context_nodes, progress_dir
         )
-        return batch_name, success
+        return batch_name, success, failed
 
     # 使用线程池并发处理
     with ThreadPoolExecutor(max_workers=MAX_CONCURRENT_REQUESTS) as executor:
         futures = {executor.submit(process_one_batch, batch): batch for batch in pending_batches}
 
         for future in as_completed(futures):
-            batch_name, success = future.result()
+            batch_name, success, failed = future.result()
 
             with result_lock:
                 result_map.update(success)
+                all_failed.extend(failed)
                 completed_nodes = len([n for n in leaves if n["id"] in result_map])
                 print_progress(f"  📊 进度: {completed_nodes}/{total_nodes} 节点")
 
@@ -505,41 +521,41 @@ def run_generation_phase(
                 if save_progress_callback and success:
                     save_progress_callback()
 
-    return result_map
+    return result_map, all_failed
 
 
 # =============================================================================
 # 阶段 5-6：进度管理与主流程
 # =============================================================================
 
-def load_progress() -> dict:
+def load_progress(progress_path: Path | None = None) -> dict:
     """
     加载已有进度。
     返回格式: {"retrieval_query": {id: value}, "hypothetical_doc": {id: value}}
     """
-    if PROGRESS_JSON.exists():
-        with open(PROGRESS_JSON, "r", encoding="utf-8") as f:
+    pj = progress_path or PROGRESS_JSON
+    if pj.exists():
+        with open(pj, "r", encoding="utf-8") as f:
             data = json.load(f)
-            # 兼容旧格式（直接是 {id: query} 的字典）
-            if "retrieval_query" not in data and "hypothetical_doc" not in data:
-                return {"retrieval_query": data, "hypothetical_doc": {}}
             return data
     return {"retrieval_query": {}, "hypothetical_doc": {}}
 
 
-def save_progress(progress: dict):
+def save_progress(progress: dict, progress_path: Path | None = None):
     """保存进度到磁盘。"""
-    PROGRESS_JSON.parent.mkdir(parents=True, exist_ok=True)
-    with open(PROGRESS_JSON, "w", encoding="utf-8") as f:
+    pj = progress_path or PROGRESS_JSON
+    pj.parent.mkdir(parents=True, exist_ok=True)
+    with open(pj, "w", encoding="utf-8") as f:
         json.dump(progress, f, ensure_ascii=False, indent=2)
 
 
-def cleanup_temp_files():
+def cleanup_temp_files(progress_path: Path | None = None):
     """清理临时文件（进度文件、调试文件、原始缓存）。"""
+    pj = progress_path or PROGRESS_JSON
     patterns = [
-        PROGRESS_JSON,
-        *PROGRESS_JSON.parent.glob("_debug_parse_error_*.txt"),
-        *PROGRESS_JSON.parent.glob("_rq_raw_cache_*.json"),
+        pj,
+        *pj.parent.glob("_debug_parse_error_*.txt"),
+        *pj.parent.glob("_rq_raw_cache_*.json"),
     ]
     cleaned = []
     for p in patterns:
@@ -559,7 +575,38 @@ def main():
                         help="断点续跑，跳过已有结果的叶节点")
     parser.add_argument("--debug", action="store_true",
                         help="调试模式：遇到错误立即停止（默认关闭）")
+    parser.add_argument("--retry-failed", action="store_true",
+                        help="重跑失败节点：读取已有输出文件，筛出 status=='needs_manual_review' 的节点重新生成")
+    parser.add_argument("--tracker", type=str, default=None,
+                        help="Web UI 进度追踪 run_id（内部使用）")
+    parser.add_argument(
+        "--project-dir",
+        type=str,
+        default=None,
+        metavar="DIR",
+        help=(
+            "企业项目目录（如 projects/艾森股份_2025）。"
+            "不传则使用旧的 data/ 路径（向后兼容）。"
+        ),
+    )
     args = parser.parse_args()
+
+    # ── 路径初始化（多企业支持，向后兼容）────────────────────────────────────
+    from config import get_paths
+    paths = get_paths(args.project_dir)
+    paths.processed_dir.mkdir(parents=True, exist_ok=True)
+
+    input_xlsx    = paths.framework_xlsx
+    output_json   = paths.framework_queries
+    progress_json = paths.rq_progress
+    progress_dir  = paths.processed_dir
+
+    # Web UI 进度追踪
+    tracker = get_tracker(args, "generate_retrieval_queries")
+
+    # 耗时统计
+    from stage_timer import StageTimer
+    timer = StageTimer()
 
     # 只有明确指定 --debug 才进入调试模式，默认使用生产模式（带重试）
     debug_mode = args.debug
@@ -567,16 +614,20 @@ def main():
     print_progress(f"{'='*60}")
     print_progress(f"ESG 报告框架 Retrieval Query 生成（双查询版本）")
     print_progress(f"模型: {args.model}")
-    print_progress(f"输入: {INPUT_XLSX}")
-    print_progress(f"输出: {OUTPUT_JSON}")
+    print_progress(f"输入: {input_xlsx}")
+    print_progress(f"输出: {output_json}")
     print_progress(f"并发数: {MAX_CONCURRENT_REQUESTS}")
     print_progress(f"模式: {'调试模式（遇错即停）' if debug_mode else f'生产模式（失败重试 {MAX_RETRIES} 次）'}")
     print_progress(f"{'='*60}\n")
 
     # ── 阶段 1 ──
-    records = parse_excel(INPUT_XLSX)
+    timer.start("阶段 1：解析 Excel")
+    tracker.set_stage("Parse Excel")
+    records = parse_excel(input_xlsx)
 
     # ── 阶段 2 ──
+    timer.start("阶段 2：识别叶节点")
+    tracker.set_stage("Identify leaves")
     leaves = identify_leaves(records)
 
     if not leaves:
@@ -593,32 +644,56 @@ def main():
 
     # ── 初始化 LLM 客户端 ──
     client = OpenAI(
-        base_url=f"{LLM_BASE_URL}/v1",
+        base_url=LLM_BASE_URL,
         api_key=LLM_API_KEY,
+        timeout=LLM_TIMEOUT,
     )
 
     # ── 加载已有进度 ──
     progress = {"retrieval_query": {}, "hypothetical_doc": {}}
     if args.resume:
-        progress = load_progress()
+        progress = load_progress(progress_json)
         print_progress(f"  已加载历史进度: "
                        f"retrieval_query={len(progress['retrieval_query'])} 条, "
                        f"hypothetical_doc={len(progress['hypothetical_doc'])} 条")
 
     # 创建保存进度的回调函数
     def save_progress_callback():
-        save_progress(progress)
+        save_progress(progress, progress_json)
+
+    # ── --retry-failed：替换 leaves 为失败节点，复用现有流程 ──
+    if args.retry_failed:
+        if not output_json.exists():
+            print_progress(f"[错误] 输出文件不存在，无法重跑失败节点：{output_json}")
+            sys.exit(1)
+        with open(output_json, "r", encoding="utf-8") as f:
+            existing_output = json.load(f)
+        failed_leaf_ids = {
+            e["id"] for e in existing_output if e.get("status") == "needs_manual_review"
+        }
+        if not failed_leaf_ids:
+            print_progress("没有需要重跑的失败节点（status=='needs_manual_review'），退出")
+            sys.exit(0)
+        leaves = [n for n in leaves if n["id"] in failed_leaf_ids]
+        print_progress(f"  --retry-failed：筛出 {len(leaves)} 个失败节点重跑")
+        # 加载已有进度，清除失败节点的旧 null 值
+        progress = load_progress(progress_json)
+        for leaf_id in failed_leaf_ids:
+            progress["retrieval_query"].pop(leaf_id, None)
+            progress["hypothetical_doc"].pop(leaf_id, None)
 
     # ── 加载 Prompt 模板 ──
     prompt_base_query = load_prompt(PROMPT_BASE_QUERY)
     prompt_hyde = load_prompt(PROMPT_HYDE)
 
     # ── 阶段 3：生成基础查询 ──
+    timer.start("阶段 3：生成基础查询")
     print_progress(f"\n{'='*60}")
     print_progress("阶段 3: 生成基础查询 (retrieval_query)")
     print_progress(f"{'='*60}")
+    tracker.set_stage("Base queries", total=len(leaves))
 
-    progress["retrieval_query"] = run_generation_phase(
+    progress["retrieval_query"], failed_rq = run_generation_phase(
         client=client,
         model=args.model,
         leaves=leaves,
@@ -628,15 +703,18 @@ def main():
         phase_name="基础查询",
         save_progress_callback=save_progress_callback,
         debug_mode=debug_mode,
+        progress_dir=progress_dir,
     )
-    save_progress(progress)
+    save_progress(progress, progress_json)
 
     # ── 阶段 4：生成假设文档 ──
+    timer.start("阶段 4：生成假设文档")
     print_progress(f"\n{'='*60}")
     print_progress("阶段 4: 生成假设文档 (hypothetical_doc)")
     print_progress(f"{'='*60}")
+    tracker.set_stage("HyDE docs", total=len(leaves))
 
-    progress["hypothetical_doc"] = run_generation_phase(
+    progress["hypothetical_doc"], failed_hd = run_generation_phase(
         client=client,
         model=args.model,
         leaves=leaves,
@@ -646,12 +724,15 @@ def main():
         phase_name="假设文档",
         save_progress_callback=save_progress_callback,
         debug_mode=debug_mode,
+        progress_dir=progress_dir,
     )
-    save_progress(progress)
+    save_progress(progress, progress_json)
 
     # ── 输出最终 JSON ──
+    timer.start("输出 JSON")
     print_progress(f"\n{'='*60}")
     print_progress("[输出] 生成最终 JSON...")
+    tracker.set_stage("Validate")
 
     output = []
     for n in leaves:
@@ -685,8 +766,8 @@ def main():
 
         output.append(entry)
 
-    OUTPUT_JSON.parent.mkdir(parents=True, exist_ok=True)
-    with open(OUTPUT_JSON, "w", encoding="utf-8") as f:
+    output_json.parent.mkdir(parents=True, exist_ok=True)
+    with open(output_json, "w", encoding="utf-8") as f:
         json.dump(output, f, ensure_ascii=False, indent=2)
 
     # 统计
@@ -702,15 +783,25 @@ def main():
     print_progress(f"  ✓ hypothetical_doc 成功: {hd_ok}/{total}")
     print_progress(f"  ✓ 全部完成: {all_ok}/{total}")
     print_progress(f"  ⚠ 待人工审查: {needs_review}")
-    print_progress(f"输出文件: {OUTPUT_JSON}")
+    if needs_review > 0:
+        all_failed_ids = [n["id"] for n in failed_rq] + [n["id"] for n in failed_hd]
+        unique_failed = list(dict.fromkeys(all_failed_ids))
+        if unique_failed:
+            print_progress(f"  失败节点 ID（{len(unique_failed)} 个）：{unique_failed}")
+    print_progress(f"输出文件: {output_json}")
     print_progress(f"{'='*60}")
 
     # 全部成功后清理临时文件
     if needs_review == 0:
-        cleaned = cleanup_temp_files()
+        cleaned = cleanup_temp_files(progress_json)
         if cleaned:
             print_progress(f"  🧹 已清理临时文件: {', '.join(cleaned)}")
 
-
+    timer.report()
+    if needs_review > 0:
+        tracker.set_partial_failed(needs_review, unique_failed)
+    tracker.complete()
+    if needs_review > 0:
+        sys.exit(1)
 if __name__ == "__main__":
     main()

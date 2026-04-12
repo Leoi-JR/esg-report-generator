@@ -60,6 +60,13 @@ def _make_file_record(path: str, folder_code: str | None = None) -> dict:
     }
 
 
+def _get_chunks(result) -> list:
+    """从提取函数返回值中取出 chunks 列表。
+    新版返回 dict{"chunks": [...], "parents": {...}}，旧版返回 list。
+    错误时返回 []（空列表）。"""
+    return result["chunks"] if isinstance(result, dict) else result
+
+
 # ==============================================================================
 # 测试函数（5 个）
 # ==============================================================================
@@ -70,7 +77,8 @@ def test_extract_image_returns_list():
     GLM-OCR 不可用时返回 []（打印警告），可用时返回 ≥0 个 chunk。
     """
     record = _make_file_record(JPG_SAMPLE, folder_code="SD14")
-    chunks = extract_image(record)
+    result = extract_image(record)
+    chunks = _get_chunks(result)
     assert isinstance(chunks, list), "extract_image 应返回 list"
     print(f"  ✓ {os.path.basename(JPG_SAMPLE)}: 返回 list（{len(chunks)} 个 chunk）"
           + ("，GLM-OCR 不可用 → []" if len(chunks) == 0 else ""))
@@ -79,7 +87,8 @@ def test_extract_image_returns_list():
 def test_extract_image_invalid_path():
     """不存在的文件路径应返回空列表而不抛出异常。"""
     record = _make_file_record("/nonexistent/path/file.jpg")
-    chunks = extract_image(record)
+    result = extract_image(record)
+    chunks = _get_chunks(result)
     assert chunks == [], f"期望空列表，实际 {len(chunks)} 个 chunk"
     print("  ✓ 无效路径优雅降级 → []")
 
@@ -88,7 +97,8 @@ def test_extract_image_invalid_format():
     """非图片文件（如 .txt）传入应返回空列表而不抛出异常。"""
     # 构造一个扩展名为 .txt 的文件 record（文件可以不存在，Pillow 会抛出异常被捕获）
     record = _make_file_record("/nonexistent/path/not_an_image.txt")
-    chunks = extract_image(record)
+    result = extract_image(record)
+    chunks = _get_chunks(result)
     assert chunks == [], f"期望空列表，实际 {len(chunks)} 个 chunk"
     print("  ✓ 非图片格式优雅降级 → []")
 
@@ -128,7 +138,8 @@ def inspect_image(file_path: str, save_dir: str | None = None):
     import datetime
 
     record = _make_file_record(file_path)
-    chunks = extract_image(record)
+    result = extract_image(record)
+    chunks = _get_chunks(result)
 
     # 确定输出路径
     if save_dir is None:

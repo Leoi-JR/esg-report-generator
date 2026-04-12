@@ -39,6 +39,8 @@ from typing import Any
 import httpx
 from tqdm import tqdm
 
+from progress_tracker import get_tracker
+
 # 导入配置
 from config import (
     DRAFT_LLM_BASE_URL,
@@ -52,6 +54,7 @@ from config import (
     DRAFT_SCORE_THRESHOLD,
     DRAFT_TEXT_LIMIT,
     DRAFT_OUTPUT_DIR,
+    get_paths,
 )
 
 # ==============================================================================
@@ -178,7 +181,9 @@ def prepare_context(
 def build_prompt(
     node: dict,
     context_text: str,
-    sources_mapping: dict[str, dict]
+    sources_mapping: dict[str, dict],
+    company_name: str = "企业",
+    report_year: str = "2025",
 ) -> tuple[str, str]:
     """
     构建系统 prompt 和用户 prompt。
@@ -187,11 +192,17 @@ def build_prompt(
         node: 叶节点信息
         context_text: 准备好的上下文
         sources_mapping: 来源映射
+        company_name: 企业名称（用于 system prompt）
+        report_year: 报告年度
 
     Returns:
         (system_prompt, user_prompt)
     """
-    system_prompt = load_prompt("draft_system.txt")
+    system_template = load_prompt("draft_system.txt")
+    system_prompt = system_template.format(
+        company_name=company_name,
+        report_year=report_year,
+    )
     user_template = load_prompt("draft_user.txt")
 
     # 生成可用来源编号列表
@@ -330,40 +341,6 @@ async def generate_drafts_batch(
     semaphore = asyncio.Semaphore(concurrency)
 
     async with httpx.AsyncClient() as client:
-        tasks = [
-            call_llm_async(node, semaphore, client, debug)
-            for node in nodes
-        ]
-
-        # 使用 tqdm 显示进度
-        results = []
-        for coro in tqdm(
-            asyncio.as_completed(tasks),
-            total=len(tasks),
-            desc="生成初稿"
-        ):
-            result = await coro
-            results.append(result)
-
-        # 注意：as_completed 不保证顺序，需要重新对齐
-        # 这里改用 gather 保持顺序
-
-    # 重新运行以保持顺序
-    async with httpx.AsyncClient() as client:
-        tasks = [
-            call_llm_async(node, semaphore, client, debug)
-            for node in nodes
-        ]
-        results = []
-        for i, coro in enumerate(tqdm(
-            asyncio.as_completed(tasks),
-            total=len(tasks),
-            desc="生成初稿"
-        )):
-            results.append(await coro)
-
-    # 使用 gather 保持顺序
-    async with httpx.AsyncClient() as client:
         results = await asyncio.gather(*[
             call_llm_async(node, semaphore, client, debug)
             for node in nodes
@@ -375,7 +352,8 @@ async def generate_drafts_batch(
 async def generate_drafts_with_progress(
     nodes: list[dict],
     concurrency: int = 6,
-    debug: bool = False
+    debug: bool = False,
+    tracker=None
 ) -> list[dict]:
     """
     带进度条的并发生成。
@@ -384,6 +362,7 @@ async def generate_drafts_with_progress(
         nodes: 准备好的节点列表
         concurrency: 并发数
         debug: 调试模式
+        tracker: ProgressTracker 实例（可选，Web UI 进度追踪）
 
     Returns:
         生成结果列表（与输入顺序一致）
@@ -393,14 +372,26 @@ async def generate_drafts_with_progress(
 
     async with httpx.AsyncClient() as client:
         async def process_with_index(idx: int, node: dict):
+            node_id = node.get("id", f"idx_{idx}")
+            if tracker:
+                tracker.set_substep(node_id, "running")
             result = await call_llm_async(node, semaphore, client, debug)
             results[idx] = result
+            if tracker:
+                status = "done" if not result.get("error") else "error"
+                tracker.set_substep(node_id, status)
+                tracker.advance(1, detail=node.get("leaf_title", "")[:30])
             return idx
 
         tasks = [
             process_with_index(i, node)
             for i, node in enumerate(nodes)
         ]
+
+        # 初始化所有 substeps 为 pending
+        if tracker:
+            for node in nodes:
+                tracker.set_substep(node.get("id", ""), "pending")
 
         # 使用 tqdm 显示进度
         pbar = tqdm(total=len(tasks), desc="生成初稿")
@@ -588,6 +579,33 @@ async def main_async(args):
     """异步主函数。"""
     print_header()
 
+    # ── 路径初始化（多企业支持，向后兼容）────────────────────────────────────
+    paths = get_paths(args.project_dir)
+    paths.draft_output_dir.mkdir(parents=True, exist_ok=True)
+
+    # 从项目目录名提取企业名和报告年度（如 "泓淋电力_2026" → "泓淋电力", "2026"）
+    # get_paths 已在 project_dir=None 时抛出 ValueError，此处 paths.project_dir 必然有效
+    _dir_name = paths.project_dir.name
+    if "_" in _dir_name:
+        _parts = _dir_name.rsplit("_", 1)
+        company_name = _parts[0]
+        report_year = _parts[1] if _parts[1].isdigit() else "2025"
+    else:
+        company_name = _dir_name
+        report_year = "2025"
+
+    # --input / --output-dir 优先使用用户显式指定的值；
+    # 未指定时（None）从 paths 中读取，确保多企业模式下路径隔离。
+    effective_input = args.input if args.input is not None else str(paths.retrieval_results)
+    effective_output_dir = args.output_dir if args.output_dir is not None else str(paths.draft_output_dir)
+
+    # Web UI 进度追踪
+    tracker = get_tracker(args, "generate_draft")
+
+    # 耗时统计
+    from stage_timer import StageTimer
+    timer = StageTimer()
+
     # 配置
     config = {
         "model": DRAFT_LLM_MODEL,
@@ -597,8 +615,10 @@ async def main_async(args):
     }
 
     # 阶段1: 加载检索结果
+    timer.start("阶段 1：加载检索结果")
     print("阶段1: 加载检索结果...")
-    input_path = Path(args.input)
+    tracker.set_stage("Load data")
+    input_path = Path(effective_input)
     if not input_path.exists():
         print(f"  ❌ 文件不存在: {input_path}")
         return
@@ -611,10 +631,17 @@ async def main_async(args):
         retrieval_results = retrieval_results[:args.limit]
         print(f"  限制处理前 {args.limit} 个")
 
+    # 仅处理指定章节（单章节重生成模式）
+    chapter_ids_filter = None
+    if args.chapter_ids:
+        chapter_ids_filter = set(args.chapter_ids.split(","))
+        retrieval_results = [n for n in retrieval_results if n.get("id") in chapter_ids_filter]
+        print(f"  --chapter-ids：仅处理 {len(retrieval_results)} 个指定章节: {sorted(chapter_ids_filter)}")
+
     # 加载已有结果（断点续跑）
     existing_results = {}
     if args.resume:
-        draft_path = Path(args.output_dir) / "draft_results.json"
+        draft_path = Path(effective_output_dir) / "draft_results.json"
         if draft_path.exists():
             with open(draft_path, "r", encoding="utf-8") as f:
                 existing_data = json.load(f)
@@ -624,7 +651,9 @@ async def main_async(args):
             print(f"  已加载 {len(existing_results)} 个已生成结果")
 
     # 阶段2: 质量过滤 + 上下文准备
+    timer.start("阶段 2：质量过滤 + 准备")
     print("\n阶段2: 质量过滤 + 上下文准备...")
+    tracker.set_stage("Quality filter", total=len(retrieval_results))
     prepared_nodes = []
     skipped_nodes = []
     resumed_nodes = []
@@ -675,7 +704,7 @@ async def main_async(args):
         )
 
         # 构建 prompt
-        system_prompt, user_prompt = build_prompt(node, context_text, sources_mapping)
+        system_prompt, user_prompt = build_prompt(node, context_text, sources_mapping, company_name, report_year)
 
         prepared_nodes.append({
             "id": node_id,
@@ -698,21 +727,24 @@ async def main_async(args):
 
     # Dry-run 模式
     if args.dry_run:
-        output_dir = Path(args.output_dir)
+        output_dir = Path(effective_output_dir)
         output_dir.mkdir(parents=True, exist_ok=True)
         save_dry_run_output(prepared_nodes + skipped_nodes, output_dir)
         print("\n✅ Dry-run 完成")
         return
 
     # 阶段3: 并发调用 LLM
+    timer.start("阶段 3：LLM 并发撰稿")
     print(f"\n阶段3: 调用 LLM (并发={args.concurrency})...")
+    tracker.set_stage("Generate drafts", total=len(prepared_nodes))
 
     if prepared_nodes:
         start_time = time.time()
         llm_results = await generate_drafts_with_progress(
             prepared_nodes,
             concurrency=args.concurrency,
-            debug=args.debug
+            debug=args.debug,
+            tracker=tracker
         )
         elapsed = time.time() - start_time
         print(f"  耗时: {elapsed:.1f}s ({elapsed/len(prepared_nodes):.1f}s/章节)")
@@ -760,12 +792,32 @@ async def main_async(args):
     all_results.sort(key=lambda x: x.get("id", ""))
 
     # 阶段4: 保存结果
+    timer.start("阶段 4：保存结果")
+    tracker.set_stage("Save results")
     print("\n阶段4: 保存结果...")
-    output_dir = Path(args.output_dir)
+    output_dir = Path(effective_output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    save_json_results(all_results, config, output_dir / "draft_results.json")
-    save_md_preview(all_results, output_dir / "draft_preview.md")
+    draft_path = output_dir / "draft_results.json"
+
+    # 单章节重生成模式：部分更新，只替换指定 ID 的条目
+    if chapter_ids_filter:
+        existing_by_id: dict = {}
+        if draft_path.exists():
+            with open(draft_path, "r", encoding="utf-8") as f:
+                existing_data = json.load(f)
+                for item in existing_data.get("results", []):
+                    existing_by_id[item["id"]] = item
+        # 用新结果覆盖对应 ID
+        for item in all_results:
+            existing_by_id[item["id"]] = item
+        # 按 ID 排序输出
+        final_results = sorted(existing_by_id.values(), key=lambda x: x.get("id", ""))
+        save_json_results(final_results, config, draft_path)
+        # 单章节模式不覆盖全量预览文件
+    else:
+        save_json_results(all_results, config, draft_path)
+        save_md_preview(all_results, output_dir / "draft_preview.md")
 
     # 统计
     print("\n" + "=" * 70)
@@ -780,6 +832,9 @@ async def main_async(args):
         avg_words = total_words / len(generated_nodes)
         print(f"  📝 本次生成总字数: {total_words}, 平均: {avg_words:.0f} 字/章节")
 
+    timer.report()
+    tracker.complete()
+
 
 def main():
     """命令行入口。"""
@@ -790,13 +845,13 @@ def main():
 
     parser.add_argument(
         "--input",
-        default=str(DEFAULT_INPUT),
-        help=f"检索结果文件 (默认: {DEFAULT_INPUT})"
+        default=None,
+        help=f"检索结果文件（默认由 --project-dir 决定，兼容模式为 {DEFAULT_INPUT}）"
     )
     parser.add_argument(
         "--output-dir",
-        default=DRAFT_OUTPUT_DIR,
-        help=f"输出目录 (默认: {DRAFT_OUTPUT_DIR})"
+        default=None,
+        help=f"输出目录（默认由 --project-dir 决定，兼容模式为 {DRAFT_OUTPUT_DIR}）"
     )
     parser.add_argument(
         "--concurrency",
@@ -835,6 +890,28 @@ def main():
         "--resume",
         action="store_true",
         help="断点续跑（跳过已生成的章节）"
+    )
+    parser.add_argument(
+        "--chapter-ids",
+        type=str,
+        default=None,
+        help="仅生成指定章节（逗号分隔 ID，如 r016,r017），不与 --limit 同用"
+    )
+    parser.add_argument(
+        "--tracker",
+        type=str,
+        default=None,
+        help="Web UI 进度追踪 run_id（内部使用）"
+    )
+    parser.add_argument(
+        "--project-dir",
+        type=str,
+        default=None,
+        metavar="DIR",
+        help=(
+            "企业项目目录（如 projects/艾森股份_2025）。"
+            "不传则使用旧的 data/ 路径（向后兼容）。"
+        ),
     )
 
     args = parser.parse_args()

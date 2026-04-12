@@ -4,7 +4,7 @@ test_vlm_infra.py
 VLM 基础设施纯函数单元测试。
 
 测试 _filter_image / _resize_image_bytes / _to_png_bytes / _parse_vlm_response /
-_assemble_image_section_text / configure_vlm / configure_vlm_context 等函数。
+_assemble_image_section_text / configure_vlm_context 等函数。
 
 不依赖 VLM 服务运行，可离线执行。
 
@@ -213,18 +213,8 @@ def test_parse_response_only_type():
 
 
 # ==============================================================================
-# configure_vlm / configure_vlm_context 测试
+# configure_vlm_context 测试
 # ==============================================================================
-
-def test_configure_vlm():
-    """configure_vlm 应正确设置全局变量。"""
-    from extractors import configure_vlm, _VLM_BASE_URL, _VLM_MODEL
-    import extractors
-    configure_vlm("http://test:9999/v1", "test-model")
-    assert extractors._VLM_BASE_URL == "http://test:9999/v1"
-    assert extractors._VLM_MODEL == "test-model"
-    assert extractors._vlm_client is None  # 重置了
-    assert extractors._vlm_available is None  # 重置了
 
 
 def test_configure_vlm_context():

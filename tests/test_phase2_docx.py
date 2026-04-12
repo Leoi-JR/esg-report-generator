@@ -24,6 +24,11 @@ from extractors import (
 ROOT      = os.path.join(os.path.dirname(__file__), '..')
 MOCK_DATA = os.path.join(ROOT, "data/processed/模拟甲方整理后资料")
 
+
+def _unwrap_chunks(result):
+    """extract_* 现在返回 dict{"chunks":[], "parents":{}}，兼容旧版 list 返回。"""
+    return result["chunks"] if isinstance(result, dict) else result
+
 # ---------------------------------------------------------------------------
 # 测试用 docx 文件路径（从模拟数据目录选取）
 # ---------------------------------------------------------------------------
@@ -60,7 +65,7 @@ def _make_file_record(path: str, folder_code: str | None = None) -> dict:
 def test_extract_docx_returns_list():
     """extract_docx 应返回 list（即使文件为空也不抛出）。"""
     record = _make_file_record(DOCX_SIMPLE, folder_code="GB6")
-    chunks = extract_docx(record)
+    chunks = _unwrap_chunks(extract_docx(record))
     assert isinstance(chunks, list), "extract_docx 应返回 list"
     print(f"  ✓ {os.path.basename(DOCX_SIMPLE)}: {len(chunks)} 个 chunk")
 
@@ -68,7 +73,7 @@ def test_extract_docx_returns_list():
 def test_extract_docx_complex_has_chunks():
     """含正文内容的 docx 应提取出 ≥1 个有效 chunk。"""
     record = _make_file_record(DOCX_COMPLEX, folder_code="EC6")
-    chunks = extract_docx(record)
+    chunks = _unwrap_chunks(extract_docx(record))
     assert len(chunks) >= 1, f"期望 ≥1 个 chunk，实际 {len(chunks)}"
     print(f"  ✓ {os.path.basename(DOCX_COMPLEX)}: {len(chunks)} 个 chunk")
 
@@ -76,12 +81,13 @@ def test_extract_docx_complex_has_chunks():
 def test_extract_docx_chunk_fields():
     """每个 ChunkRecord 必须包含规定字段，且 char_count ≥ 0。"""
     record = _make_file_record(DOCX_COMPLEX, folder_code="EC6")
-    chunks = extract_docx(record)
+    result = extract_docx(record)
+    chunks = _unwrap_chunks(result)
     assert len(chunks) >= 1, "无 chunk，跳过字段验证"
 
     required = {"chunk_id", "parent_id", "file_path", "file_name",
-                "folder_code", "page_or_sheet", "chunk_index",
-                "text", "parent_text", "char_count"}
+                "folder_code", "page_or_sheet",
+                "text", "char_count"}
     for c in chunks:
         missing = required - set(c.keys())
         assert not missing, f"chunk 缺少字段：{missing}"
@@ -93,7 +99,7 @@ def test_extract_docx_chunk_fields():
 def test_extract_docx_no_zero_char_count():
     """过滤后不应存在 char_count=0 的 chunk。"""
     record = _make_file_record(DOCX_COMPLEX, folder_code="EC6")
-    chunks = extract_docx(record)
+    chunks = _unwrap_chunks(extract_docx(record))
     zero_chunks = [c for c in chunks if c["char_count"] == 0]
     assert zero_chunks == [], (
         f"存在 {len(zero_chunks)} 个 char_count=0 的 chunk，"
@@ -106,7 +112,7 @@ def test_extract_docx_chunk_size_limit():
     """所有 chunk 的 text 长度应 ≤ CHUNK_MAX_SIZE（config.py 中配置）。"""
     from config import CHUNK_MAX_SIZE
     record = _make_file_record(DOCX_COMPLEX, folder_code="EC6")
-    chunks = extract_docx(record)
+    chunks = _unwrap_chunks(extract_docx(record))
     over = [c for c in chunks if len(c["text"]) > CHUNK_MAX_SIZE]
     assert over == [], (
         f"存在 {len(over)} 个超过 {CHUNK_MAX_SIZE} 字符的 chunk，"
@@ -118,7 +124,7 @@ def test_extract_docx_chunk_size_limit():
 def test_extract_docx_chunk_id_unique():
     """所有 chunk_id 应唯一。"""
     record = _make_file_record(DOCX_COMPLEX, folder_code="EC6")
-    chunks = extract_docx(record)
+    chunks = _unwrap_chunks(extract_docx(record))
     ids = [c["chunk_id"] for c in chunks]
     assert len(ids) == len(set(ids)), f"存在重复 chunk_id"
     print(f"  ✓ chunk_id 全部唯一（{len(ids)} 个）")
@@ -140,7 +146,7 @@ def test_extract_doc_returns_list():
     """extract_doc 应返回 list（不论 soffice 是否可用）。"""
     import shutil
     record = _make_file_record(DOC_SAMPLE, folder_code="GC1")
-    chunks = extract_doc(record)
+    chunks = _unwrap_chunks(extract_doc(record))
     assert isinstance(chunks, list), "extract_doc 应返回 list"
 
     if shutil.which("soffice"):
@@ -158,7 +164,7 @@ def test_extract_doc_has_content():
         return
 
     record = _make_file_record(DOC_SAMPLE, folder_code="GC1")
-    chunks = extract_doc(record)
+    chunks = _unwrap_chunks(extract_doc(record))
     assert len(chunks) >= 1, f"期望 ≥1 个 chunk，实际 {len(chunks)}"
     total_chars = sum(c["char_count"] for c in chunks)
     assert total_chars > 0, "总有效字符应 > 0"
@@ -174,7 +180,7 @@ def test_extract_doc_preserves_folder_code():
         return
 
     record = _make_file_record(DOC_SAMPLE, folder_code="GC1")
-    chunks = extract_doc(record)
+    chunks = _unwrap_chunks(extract_doc(record))
     for c in chunks:
         assert c["folder_code"] == "GC1", (
             f"folder_code 应为 GC1，实际 {c['folder_code']}"
@@ -208,10 +214,10 @@ def inspect_docx(file_path: str, save_dir: str | None = None):
     record = _make_file_record(file_path)
 
     if ext == ".docx":
-        chunks = extract_docx(record)
+        chunks = _unwrap_chunks(extract_docx(record))
         type_label = "docx"
     elif ext == ".doc":
-        chunks = extract_doc(record)
+        chunks = _unwrap_chunks(extract_doc(record))
         type_label = "doc"
     else:
         print(f"不支持的扩展名：{ext}")

@@ -20,18 +20,19 @@ ChunkRecord 字段：
     page_or_sheet, chunk_index, text, parent_text, char_count
 
 已实现：
-    extract_pdf(file_record)   → List[dict]  # 步骤 2-1（含 GLM-OCR）
+    extract_pdf(file_record)   → List[dict]  # 步骤 2-1（含智谱线上 OCR）
     extract_docx(file_record)  → List[dict]  # 步骤 2-2
     extract_doc(file_record)   → List[dict]  # 步骤 2-3（LibreOffice 转换）
     extract_xlsx(file_record)  → List[dict]  # 步骤 2-4
     extract_xls(file_record)   → List[dict]  # 步骤 2-4
     extract_pptx(file_record)  → List[dict]  # 步骤 2-5
     extract_ppt(file_record)   → List[dict]  # 步骤 2-5（LibreOffice 转换）
-    extract_image(file_record) → List[dict]  # 步骤 2-6（JPG/PNG，GLM-OCR）
+    extract_image(file_record) → List[dict]  # 步骤 2-6（JPG/PNG，智谱 OCR）
 """
 
 import os
 import re
+import threading
 from typing import List
 
 from config import (
@@ -46,23 +47,16 @@ from config import (
     PDF_TITLE_MAX_CHARS,
     PDF_TITLE_RATIO_MAX,
     PDF_TITLE_MIN_COUNT,
-    # SDK PDF 提取参数（v2）
+    # PDF 提取参数
     PDF_PAGE_MIN_CHARS,
     TITLE_REBUILD_MODE,
-    SDK_CONFIG_PATH,
-    SDK_REUSE_INSTANCE,
-    SDK_LAYOUT_DEVICE,
     # DOCX 标题识别
     DOCX_HEADING_MAX_CHARS,
     # LibreOffice 超时
     SOFFICE_DOC_TIMEOUT,
     SOFFICE_PPT_TIMEOUT,
-    # GLM-OCR 服务
-    GLM_OCR_BASE_URL as _GLM_OCR_BASE_URL_DEFAULT,
-    GLM_OCR_MODEL    as _GLM_OCR_MODEL_DEFAULT,
-    # VLM 图片分类与描述服务
-    VLM_BASE_URL as _VLM_BASE_URL_DEFAULT,
-    VLM_MODEL    as _VLM_MODEL_DEFAULT,
+    # VLM 图片分类与描述
+    VLM_MODEL,
     # VLM 图片过滤与处理
     IMAGE_MIN_WIDTH,
     IMAGE_MIN_HEIGHT,
@@ -70,14 +64,10 @@ from config import (
     VLM_MAX_IMAGE_PX,
     # VLM 缓存
     VLM_CACHE_PATH,
-    # SDK 图片缓存
-    SDK_IMAGE_CACHE_DIR,
     # LLM API（标题层级 LLM 重建用）
     DRAFT_LLM_BASE_URL,
     DRAFT_LLM_API_KEY,
     DRAFT_LLM_MODEL,
-    # SDK DPI（坐标转换用）
-    SDK_PDF_DPI,
     # 表格处理优化参数（Phase 1）
     TABLE_MAX_ROWS,
     SHORT_TEXT_THRESHOLD,
@@ -190,8 +180,8 @@ def _convert_single_table(table_html: str, pd, StringIO) -> str:
             # tabulate 未安装
             return None
 
-    except Exception:
-        # 解析失败
+    except Exception as e:
+        print(f"[WARN] 表格转 Markdown 失败：{e}")
         return None
 
 
@@ -731,48 +721,101 @@ def make_chunks_from_sections(
 # 2-1  GLM-OCR 调用封装
 # ==============================================================================
 
-# GLM-OCR 服务配置（从 config.py 读取默认值；可由 configure_glmocr() 覆盖）
-_GLM_OCR_BASE_URL = _GLM_OCR_BASE_URL_DEFAULT
-_GLM_OCR_MODEL    = _GLM_OCR_MODEL_DEFAULT
+# 智谱 OCR 并发控制（Semaphore 惰性初始化，线程安全）
+_zhipu_ocr_semaphore: threading.Semaphore | None = None
+_zhipu_sem_lock = threading.Lock()
 
-_glmocr_client = None  # 懒加载单例
+def _get_zhipu_semaphore() -> threading.Semaphore:
+    global _zhipu_ocr_semaphore
+    if _zhipu_ocr_semaphore is None:
+        with _zhipu_sem_lock:
+            if _zhipu_ocr_semaphore is None:
+                from config import ZHIPU_OCR_CONCURRENCY
+                _zhipu_ocr_semaphore = threading.Semaphore(ZHIPU_OCR_CONCURRENCY)
+    return _zhipu_ocr_semaphore
 
 
-def configure_glmocr(base_url: str, model: str) -> None:
+def _call_zhipu_layout_parsing(
+    file_data: bytes,
+    file_type: str = "image",   # "image" 或 "pdf"
+    start_page: int | None = None,
+    end_page: int | None = None,
+) -> dict:
     """
-    由 align_evidence.py 在启动时调用，将主配置区的参数注入到本模块。
-    必须在首次调用 call_glmocr() 之前执行。
+    调用智谱线上 layout_parsing API。
+
+    参数:
+        file_data: 文件二进制数据（PNG/JPEG/PDF）
+        file_type: "image" 或 "pdf"
+        start_page/end_page: PDF 页码范围（可选）
+
+    返回:
+        {"md_results": str, "layout_details": list}
+        或抛出 RuntimeError / requests.HTTPError
+
+    注意:
+        - 单图 ≤ 10MB，PDF ≤ 50MB，最多 100 页
+        - layout_details 中 bbox_2d 为像素坐标，region 含 width/height 页面尺寸
     """
-    global _GLM_OCR_BASE_URL, _GLM_OCR_MODEL, _glmocr_client
-    _GLM_OCR_BASE_URL = base_url
-    _GLM_OCR_MODEL    = model
-    _glmocr_client    = None  # 重置单例，使下次调用重新创建
+    import requests
+    import base64
+    from config import ZHIPU_API_KEY, ZHIPU_API_BASE_URL, GLM_OCR_MODEL
+
+    if not ZHIPU_API_KEY:
+        raise RuntimeError("ZHIPU_API_KEY 未配置，无法调用智谱 layout_parsing API")
+
+    b64 = base64.b64encode(file_data).decode()
+
+    # 智谱 API 要求 data URI 格式（非 base64:// 前缀）
+    if file_type == "pdf":
+        data_uri = f"data:application/pdf;base64,{b64}"
+    else:
+        # 自动检测 PNG / JPEG
+        if file_data[:4] == b'\x89PNG':
+            mime = "image/png"
+        elif file_data[:2] == b'\xff\xd8':
+            mime = "image/jpeg"
+        else:
+            mime = "image/png"  # 默认 PNG
+        data_uri = f"data:{mime};base64,{b64}"
+
+    payload = {
+        "model": GLM_OCR_MODEL,
+        "file": data_uri,
+    }
+    if file_type == "pdf":
+        if start_page is not None:
+            payload["start_page_id"] = start_page
+        if end_page is not None:
+            payload["end_page_id"] = end_page
+
+    url = f"{ZHIPU_API_BASE_URL}/layout_parsing"
+    headers = {
+        "Authorization": f"Bearer {ZHIPU_API_KEY}",
+        "Content-Type": "application/json",
+    }
+
+    # 并发控制：限制同时访问智谱 API 的线程数
+    with _get_zhipu_semaphore():
+        resp = requests.post(url, headers=headers, json=payload, timeout=300)
+    resp.raise_for_status()
+
+    result = resp.json()
+    # 智谱返回结构：{"data": {"md_results": ..., "layout_details": ...}, ...}
+    data = result.get("data", result)
+    return {
+        "md_results": data.get("md_results", ""),
+        "layout_details": data.get("layout_details", []),
+    }
 
 
 # ==============================================================================
-# 2-1b  VLM 图片分类与描述调用封装
+# 2-1b  VLM 图片分类与描述调用封装（DashScope qwen3-vl-plus）
 # ==============================================================================
 
-# VLM 服务配置（从 config.py 读取默认值；可由 configure_vlm() 覆盖）
-_VLM_BASE_URL  = _VLM_BASE_URL_DEFAULT
-_VLM_MODEL     = _VLM_MODEL_DEFAULT
-
-_vlm_client    = None   # 懒加载单例（OpenAI 兼容客户端）
-_vlm_available = None   # None=未探测, True=可用, False=不可用
 _vlm_context:  dict = {}  # {code: enhanced_query_text}，由 configure_vlm_context() 注入
 _vlm_cache:    dict = {}  # {sha256_hex: {"type": str, "description": str}}
-
-
-def configure_vlm(base_url: str, model: str) -> None:
-    """
-    由 align_evidence.py 在启动时调用，将 VLM 服务配置注入本模块。
-    必须在首次调用 call_vlm_classify() 之前执行。
-    """
-    global _VLM_BASE_URL, _VLM_MODEL, _vlm_client, _vlm_available
-    _VLM_BASE_URL  = base_url
-    _VLM_MODEL     = model
-    _vlm_client    = None   # 重置单例
-    _vlm_available = None   # 重置探测状态
+_vlm_cache_lock = threading.Lock()  # 文件级并发提取时保护 _vlm_cache 读写
 
 
 def configure_vlm_context(enhanced_queries: dict) -> None:
@@ -784,29 +827,31 @@ def configure_vlm_context(enhanced_queries: dict) -> None:
     _vlm_context = enhanced_queries or {}
 
 
-def load_vlm_cache() -> None:
-    """从 VLM_CACHE_PATH 加载已有缓存到 _vlm_cache。align_evidence.py 启动时调用。"""
+def load_vlm_cache(cache_path: str | None = None) -> None:
+    """从 cache_path（默认 VLM_CACHE_PATH）加载已有缓存到 _vlm_cache。align_evidence.py 启动时调用。"""
     global _vlm_cache
     import json as _json
-    if os.path.isfile(VLM_CACHE_PATH):
+    path = cache_path if cache_path is not None else VLM_CACHE_PATH
+    if os.path.isfile(path):
         try:
-            with open(VLM_CACHE_PATH, "r", encoding="utf-8") as f:
+            with open(path, "r", encoding="utf-8") as f:
                 _vlm_cache = _json.load(f)
             print(f"  ✓ VLM 缓存加载：{len(_vlm_cache)} 条")
         except Exception:
             _vlm_cache = {}
 
 
-def save_vlm_cache() -> None:
-    """将 _vlm_cache 持久化到 VLM_CACHE_PATH。align_evidence.py 阶段 2a 完成后调用。"""
+def save_vlm_cache(cache_path: str | None = None) -> None:
+    """将 _vlm_cache 持久化到 cache_path（默认 VLM_CACHE_PATH）。align_evidence.py 阶段 2a 完成后调用。"""
     import json as _json
     if not _vlm_cache:
         return
+    path = cache_path if cache_path is not None else VLM_CACHE_PATH
     try:
-        os.makedirs(os.path.dirname(VLM_CACHE_PATH), exist_ok=True)
-        with open(VLM_CACHE_PATH, "w", encoding="utf-8") as f:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w", encoding="utf-8") as f:
             _json.dump(_vlm_cache, f, ensure_ascii=False, indent=2)
-        print(f"  ✓ VLM 缓存已保存：{len(_vlm_cache)} 条 → {VLM_CACHE_PATH}")
+        print(f"  ✓ VLM 缓存已保存：{len(_vlm_cache)} 条 → {path}")
     except Exception as e:
         print(f"  [警告] VLM 缓存保存失败：{e}")
 
@@ -859,7 +904,7 @@ def call_vlm_classify(
     source_path: str = "",
 ) -> dict | None:
     """
-    调用 VLM 对图片进行分类和描述。
+    调用 DashScope qwen3-vl-plus 对图片进行分类和描述。
 
     参数:
         img_bytes    - PNG 格式图片字节流（应已 resize）
@@ -871,24 +916,20 @@ def call_vlm_classify(
 
     返回:
         {"type": str, "description": str, "source": str, "page": str, "idx": int}
-        或 None（服务不可用时）
+        或 None（调用失败时）
 
     分类选项：文档扫描件 / 表格截图 / 照片 / 流程图 / 数据图表 / 证书 / 其他
     """
     import base64
     import hashlib
-    from openai import OpenAI
-
-    global _vlm_client, _vlm_available
-
-    # ── 已探测为不可用 → 短路返回 ────────────────────────────────────────
-    if _vlm_available is False:
-        return None
+    from dashscope import MultiModalConversation
+    from config import DASHSCOPE_API_KEY
 
     # ── 缓存命中检查 ─────────────────────────────────────────────────────
     img_hash = hashlib.sha256(img_bytes).hexdigest()
-    if img_hash in _vlm_cache:
-        return _vlm_cache[img_hash]
+    with _vlm_cache_lock:
+        if img_hash in _vlm_cache:
+            return _vlm_cache[img_hash]
 
     # ── 构建 prompt ───────────────────────────────────────────────────────
     location_str = f"第{page}页 第{idx+1}张图" if page else f"第{idx+1}张图"
@@ -916,42 +957,65 @@ def call_vlm_classify(
         "描述：yyy"
     )
 
-    # ── 懒加载 VLM 客户端 ─────────────────────────────────────────────────
-    if _vlm_client is None:
-        try:
-            _vlm_client = OpenAI(api_key="not-needed", base_url=_VLM_BASE_URL)
-            _vlm_client.models.list()   # 探测连通性
-            _vlm_available = True
-        except Exception as e:
-            print(f"  [警告] VLM 服务不可用（{_VLM_BASE_URL}）：{e}")
-            _vlm_available = False
-            return None
+    # ── 调用 DashScope VLM（带重试） ────────────────────────────────────────
+    import time as _time
+    from config import API_MAX_RETRIES, API_RETRY_BASE_DELAY
 
-    # ── 调用 VLM ──────────────────────────────────────────────────────────
-    try:
-        data_uri = "data:image/png;base64," + base64.b64encode(img_bytes).decode()
-        response = _vlm_client.chat.completions.create(
-            model=_VLM_MODEL,
-            messages=[{
-                "role": "user",
-                "content": [
-                    {"type": "image_url", "image_url": {"url": data_uri}},
-                    {"type": "text",      "text": prompt},
-                ],
-            }],
-            max_tokens=256,
-            temperature=0.1,
-        )
-        raw = response.choices[0].message.content or ""
-        result = _parse_vlm_response(raw)
-        result["source"] = source_path or filename
-        result["page"]   = page
-        result["idx"]    = idx
-        _vlm_cache[img_hash] = result
-        return result
-    except Exception as e:
-        print(f"  [警告] VLM 调用失败：{e}")
-        return None
+    data_uri = "data:image/png;base64," + base64.b64encode(img_bytes).decode()
+
+    for attempt in range(API_MAX_RETRIES):
+        try:
+            response = MultiModalConversation.call(
+                api_key=DASHSCOPE_API_KEY,
+                model=VLM_MODEL,
+                messages=[{
+                    "role": "user",
+                    "content": [
+                        {"image": data_uri},
+                        {"text": prompt},
+                    ],
+                }],
+                enable_thinking=False,
+            )
+
+            # 提取文本
+            raw = ""
+            if hasattr(response, 'output') and response.output:
+                choices = response.output.get('choices', [])
+                if choices:
+                    content = choices[0].get('message', {}).get('content', [])
+                    if isinstance(content, list) and content:
+                        raw = content[0].get('text', '')
+                    elif isinstance(content, str):
+                        raw = content
+
+            if not raw:
+                if attempt < API_MAX_RETRIES - 1:
+                    wait = API_RETRY_BASE_DELAY * (2 ** attempt)
+                    print(f"  [警告] VLM 返回空内容（第 {attempt + 1} 次）：{filename} p{page}，"
+                          f"等待 {wait:.0f}s 后重试")
+                    _time.sleep(wait)
+                    continue
+                print(f"  [警告] VLM 返回空内容（已重试 {API_MAX_RETRIES} 次）：{filename} p{page}")
+                return None
+
+            result = _parse_vlm_response(raw)
+            result["source"] = source_path or filename
+            result["page"]   = page
+            result["idx"]    = idx
+            with _vlm_cache_lock:
+                _vlm_cache[img_hash] = result
+            return result
+
+        except Exception as e:
+            wait = API_RETRY_BASE_DELAY * (2 ** attempt)
+            if attempt < API_MAX_RETRIES - 1:
+                print(f"  [警告] VLM 调用第 {attempt + 1} 次失败：{e}，"
+                      f"等待 {wait:.0f}s 后重试")
+                _time.sleep(wait)
+            else:
+                print(f"  [警告] VLM 调用失败（已重试 {API_MAX_RETRIES} 次）：{e}")
+                return None
 
 
 # ==============================================================================
@@ -1103,106 +1167,95 @@ def _process_single_image(
     )
 
 
+def _process_images_batch(
+    image_tasks: list,
+    max_concurrent: int | None = None,
+) -> list:
+    """
+    并发批量处理图片（VLM 分类+描述 → 可能追加 OCR）。
+
+    参数:
+        image_tasks: 字典列表，每个元素包含 _process_single_image() 的关键字参数：
+            {"png_bytes", "width", "height", "filename", "page", "idx",
+             "folder_code"(可选), "source_path"(可选)}
+        max_concurrent: 最大并发数，默认从 config.VLM_CONCURRENCY 读取
+
+    返回:
+        与输入等长的列表，成功为 section 文本字符串，失败/过滤为 None。
+    """
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+    from config import VLM_CONCURRENCY
+
+    if max_concurrent is None:
+        max_concurrent = VLM_CONCURRENCY
+    if not image_tasks:
+        return []
+
+    results = [None] * len(image_tasks)
+
+    with ThreadPoolExecutor(max_workers=max_concurrent) as pool:
+        future_to_idx = {
+            pool.submit(_process_single_image, **task): i
+            for i, task in enumerate(image_tasks)
+        }
+        for future in as_completed(future_to_idx):
+            i = future_to_idx[future]
+            try:
+                results[i] = future.result()
+            except Exception as e:
+                print(f"  [警告] 图片并发处理异常: {e}")
+
+    return results
+
+
 def call_glmocr(img_bytes: bytes) -> str:
     """
-    调用本地 vLLM 部署的 GLM-OCR 服务（OpenAI 兼容接口）。
-    img_bytes: PNG 格式的图片字节流
+    调用智谱线上 layout_parsing API 对单张图片进行 OCR。
+
+    img_bytes: PNG/JPEG 格式的图片字节流
     返回: 识别出的文本（Markdown 格式）
-
-    vLLM 服务需提前在 GPU 服务器上启动：
-        vllm serve zai-org/GLM-OCR \\
-            --allowed-local-media-path / \\
-            --port 8080 \\
-            --speculative-config '{"method": "mtp", "num_speculative_tokens": 1}' \\
-            --served-model-name glm-ocr
     """
-    import base64
-    from openai import OpenAI
-
-    global _glmocr_client
-    if _glmocr_client is None:
-        _glmocr_client = OpenAI(
-            api_key="not-needed",       # vLLM 本地服务无需真实 key
-            base_url=_GLM_OCR_BASE_URL,
-        )
-
-    data_uri = "data:image/png;base64," + base64.b64encode(img_bytes).decode()
-    response = _glmocr_client.chat.completions.create(
-        model=_GLM_OCR_MODEL,
-        messages=[{
-            "role": "user",
-            "content": [
-                {"type": "image_url", "image_url": {"url": data_uri}},
-                {"type": "text",      "text": "Text Recognition:"},
-            ],
-        }],
-        max_tokens=8192,
-        temperature=0.01,
-    )
-    return response.choices[0].message.content or ""
+    result = _call_zhipu_layout_parsing(img_bytes, file_type="image")
+    return result.get("md_results", "").strip()
 
 
 def ocr_image_with_sdk(img_bytes: bytes, img_type: str = "文档扫描件") -> str:
     """
-    使用 GlmOcr SDK 对单张图片进行版面检测 + 结构化 OCR。
+    对单张图片进行版面检测 + 结构化 OCR（智谱线上 layout_parsing API）。
 
-    相比 call_glmocr()（model-only），SDK 方式的优势：
-      - 版面检测自动区分 text/table/formula 区域
-      - 表格区域使用 "Table Recognition:" prompt → 输出 HTML <table>
-      - 结构化输出，表格识别更准确
+    带重试：指数退避重试 API_MAX_RETRIES 次，全部失败后回退到 call_glmocr()。
 
     参数:
         img_bytes: PNG 格式图片字节流
-        img_type: VLM 分类结果（用于日志，不影响 SDK 行为）
+        img_type: VLM 分类结果（用于日志，不影响行为）
 
     返回:
         识别出的文本（Markdown 格式，表格为 HTML）
-
-    注意:
-        - 首次调用会初始化 SDK（约 4 秒加载 PP-DocLayout-V3）
-        - 后续调用复用单例实例
-        - 若 SDK 初始化失败，回退到 call_glmocr()
     """
-    import tempfile
-    import os as _os
+    import time as _time
+    from config import API_MAX_RETRIES, API_RETRY_BASE_DELAY
 
-    try:
-        sdk = _init_sdk()
-    except Exception as e:
-        print(f"  [警告] SDK 初始化失败，回退到 model-only OCR：{e}")
-        return call_glmocr(img_bytes)
-
-    # SDK.parse() 需要文件路径，将图片字节写入临时文件
-    try:
-        with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp:
-            tmp.write(img_bytes)
-            tmp_path = tmp.name
-
-        result = sdk.parse(tmp_path, save_layout_visualization=False)
-
-        # 提取 markdown 结果
-        markdown = ""
-        if hasattr(result, 'markdown_result') and result.markdown_result:
-            markdown = result.markdown_result
-        else:
-            markdown = str(result)
-
-        # 清理临时文件
+    for attempt in range(API_MAX_RETRIES):
         try:
-            _os.unlink(tmp_path)
-        except Exception:
-            pass
+            result = _call_zhipu_layout_parsing(img_bytes, file_type="image")
+            markdown = result.get("md_results", "").strip()
+            if markdown:
+                return markdown
+            # md_results 为空，视为失败触发重试
+            if attempt < API_MAX_RETRIES - 1:
+                wait = API_RETRY_BASE_DELAY * (2 ** attempt)
+                _time.sleep(wait)
+                continue
+        except Exception as e:
+            wait = API_RETRY_BASE_DELAY * (2 ** attempt)
+            if attempt < API_MAX_RETRIES - 1:
+                print(f"  [警告] 图片 OCR 第 {attempt + 1} 次失败：{e}，"
+                      f"等待 {wait:.0f}s 后重试")
+                _time.sleep(wait)
+            else:
+                print(f"  [警告] 图片 OCR 失败（已重试 {API_MAX_RETRIES} 次），回退到 call_glmocr：{e}")
 
-        return markdown.strip() if markdown else ""
-
-    except Exception as e:
-        print(f"  [警告] SDK OCR 失败，回退到 model-only：{e}")
-        # 清理临时文件
-        try:
-            _os.unlink(tmp_path)
-        except Exception:
-            pass
-        return call_glmocr(img_bytes)
+    return call_glmocr(img_bytes)
 
 
 # ==============================================================================
@@ -1211,67 +1264,8 @@ def ocr_image_with_sdk(img_bytes: bytes, img_type: str = "文档扫描件") -> s
 
 
 # ==============================================================================
-# 2-1v2  PDF v2 路径：glmocr SDK 流水线
+# 2-1v2  PDF v2 路径：智谱线上 layout_parsing API
 # ==============================================================================
-
-# SDK 单例实例（懒加载，由 _init_sdk() 管理）
-_sdk_instance = None
-
-
-def _init_sdk():
-    """
-    SDK 实例的懒加载管理（单例模式）。
-
-    首次调用时初始化 GlmOcr（约 4 秒加载 PP-DocLayout-V3 版面检测模型），
-    后续调用复用同一实例。进程退出时自然释放。
-
-    动态注入配置：
-      - OCR 服务地址/端口/模型名 ← config.py GLM_OCR_BASE_URL / GLM_OCR_MODEL
-      - 版面检测 GPU ← config.py SDK_LAYOUT_DEVICE
-      - PDF 渲染 DPI ← config.py SDK_PDF_DPI（覆盖 sdk_config.yaml 中的 pdf_dpi）
-
-    PP-DocLayout-V3 是本地推理模型，不需要开启独立服务/端口。
-    GlmOcr 初始化时加载模型权重到 GPU 显存，以单例模式常驻，
-    调用 parse() 时直接推理，进程退出时自然释放显存。
-
-    Returns:
-        GlmOcr 实例
-    """
-    global _sdk_instance
-    if _sdk_instance is not None and SDK_REUSE_INSTANCE:
-        return _sdk_instance
-
-    from glmocr import GlmOcr, load_config
-
-    # 从 config.py 的 GLM_OCR_BASE_URL 解析 host 和 port
-    # GLM_OCR_BASE_URL 格式如 "http://localhost:8080/v1"
-    from urllib.parse import urlparse
-    parsed = urlparse(_GLM_OCR_BASE_URL)
-    ocr_host = parsed.hostname or "localhost"
-    ocr_port = parsed.port or 8080
-
-    # 加载 yaml 配置并动态覆盖 DPI
-    config = load_config(SDK_CONFIG_PATH)
-    if hasattr(config, 'pipeline') and hasattr(config.pipeline, 'page_loader'):
-        config.pipeline.page_loader.pdf_dpi = SDK_PDF_DPI
-
-    print(f"  初始化 GlmOcr SDK（版面检测 GPU={SDK_LAYOUT_DEVICE}, DPI={SDK_PDF_DPI}）...",
-          flush=True)
-    import time as _time
-    t0 = _time.time()
-
-    _sdk_instance = GlmOcr(
-        config_path=SDK_CONFIG_PATH,
-        ocr_api_host=ocr_host,
-        ocr_api_port=ocr_port,
-        model=_GLM_OCR_MODEL,
-        cuda_visible_devices=SDK_LAYOUT_DEVICE,
-    )
-
-    elapsed = _time.time() - t0
-    print(f"  ✓ GlmOcr SDK 初始化完成（{elapsed:.1f}s）")
-
-    return _sdk_instance
 
 
 def classify_pdf_v2(doc) -> str:
@@ -1577,7 +1571,7 @@ def _parse_sdk_markdown(markdown: str, titles_with_levels: list) -> list:
     return sections
 
 
-def _extract_sdk_images(json_result, doc, file_record: dict) -> list:
+def _extract_sdk_images(json_result, doc, file_record: dict, img_base_dir: str | None = None) -> list:
     """
     处理 SDK JSON 中 label=="image" 或 "chart" 的区域。
 
@@ -1594,7 +1588,7 @@ def _extract_sdk_images(json_result, doc, file_record: dict) -> list:
         1. 遍历 json_result 的每页每个区域
         2. 筛选 native_label 为 "image" 或 "chart" 的区域
         3. 用 bbox 坐标从对应页面裁切图片（page.get_pixmap(clip=rect)）
-        4. 保存裁切图片到 SDK_IMAGE_CACHE_DIR（供后续 VLM 描述溯源）
+        4. 保存裁切图片到 img_base_dir（供后续 VLM 描述溯源）
         5. 调用 _process_single_image() → VLM 分类+描述
         6. 返回 image sections
 
@@ -1613,9 +1607,9 @@ def _extract_sdk_images(json_result, doc, file_record: dict) -> list:
     source_path = file_record.get("relative_path", filename)
     global_img_idx = 0
 
-    # 文件级图片缓存目录：sdk_images/{文件名去扩展名}/
+    # 文件级图片缓存目录：{img_base_dir}/{文件名去扩展名}/
     file_stem = os.path.splitext(filename)[0]
-    img_dir = os.path.join(SDK_IMAGE_CACHE_DIR, file_stem)
+    img_dir = os.path.join(img_base_dir, file_stem)
 
     if not json_result or not isinstance(json_result, list):
         return sections
@@ -1640,10 +1634,14 @@ def _extract_sdk_images(json_result, doc, file_record: dict) -> list:
                 continue
 
             try:
-                # bbox_2d 格式: [x0, y0, x1, y1]（像素坐标，基于 SDK 渲染 DPI）
-                # SDK 默认 pdf_dpi=SDK_PDF_DPI，PyMuPDF 默认 72 DPI
-                # 需要将 SDK bbox 坐标转换为 PyMuPDF 坐标系
-                scale = 72.0 / SDK_PDF_DPI
+                # bbox_2d 格式: [x0, y0, x1, y1]（像素坐标）
+                # 需要将 bbox 坐标转换为 PyMuPDF 坐标系（72 DPI）
+                # 线上 API 区域含 width/height 字段 → 用页面尺寸计算 scale
+                region_page_width = region.get("width")
+                if not region_page_width or region_page_width <= 0:
+                    print(f"  [警告] SDK 图片区域缺少 width 字段（页{page_idx + 1}），跳过")
+                    continue
+                scale = page.rect.width / region_page_width
                 rect = fitz.Rect(
                     bbox[0] * scale,
                     bbox[1] * scale,
@@ -1695,20 +1693,21 @@ def _extract_sdk_images(json_result, doc, file_record: dict) -> list:
     return sections
 
 
-def parse_pdf_sdk(file_record: dict) -> list:
+def parse_pdf_sdk(file_record: dict, img_base_dir: str | None = None) -> list:
     """
-    SDK 流水线的完整 PDF 提取入口（v2，替代 ocr_pdf）。
+    PDF 提取入口（扫描件/混合 PDF），使用智谱线上 layout_parsing API。
 
     流程:
-        1. 调用 GlmOcr.parse() → 获取 markdown + json_result
+        1. 调用智谱线上 API → 获取 markdown + layout_details
         2. 从 markdown 提取标题列表（# → doc_title, ## → paragraph_title）
         3. 标题层级重建（rule 或 llm 模式）
         4. Markdown 切割为 section 列表
-        5. 处理 json_result 中的 image/chart 区域
+        5. 处理 layout_details 中的 image/chart 区域
         6. 合并文本 sections + image sections
 
     参数:
         file_record: 文件记录 dict
+        img_base_dir: SDK 图片缓存目录（企业专属路径，None 时跳过图片提取）
 
     返回:
         section 列表
@@ -1718,32 +1717,38 @@ def parse_pdf_sdk(file_record: dict) -> list:
     file_path = file_record["file_path"]
     file_name = file_record.get("file_name", "")
 
-    # ── 1. SDK 解析 ──────────────────────────────────────────────────────────
-    try:
-        sdk = _init_sdk()
-        import time as _time
-        t0 = _time.time()
-        print(f"    SDK 解析中：{file_name} ...", flush=True)
-        result = sdk.parse(file_path, save_layout_visualization=False)
-        elapsed = _time.time() - t0
-        print(f"    ✓ SDK 解析完成（{elapsed:.1f}s）：{file_name}")
-    except Exception as e:
-        print(f"  [错误] SDK 解析失败：{file_name} — {e}")
-        return []
+    # ── 1. 智谱线上 API 解析（带重试） ─────────────────────────────────────
 
-    # ── 2. 获取结果 ──────────────────────────────────────────────────────────
-    markdown = ""
-    if hasattr(result, 'markdown_result') and result.markdown_result:
-        markdown = result.markdown_result
-    else:
-        markdown = str(result)
+    import time as _time
+    from config import API_MAX_RETRIES, API_RETRY_BASE_DELAY
 
-    json_result = None
-    if hasattr(result, 'json_result'):
-        json_result = result.json_result
+    with open(file_path, "rb") as f:
+        pdf_bytes = f.read()
+
+    api_result = None
+    for attempt in range(API_MAX_RETRIES):
+        try:
+            t0 = _time.time()
+            print(f"    智谱线上解析中：{file_name} ...", flush=True)
+            api_result = _call_zhipu_layout_parsing(pdf_bytes, file_type="pdf")
+            elapsed = _time.time() - t0
+            print(f"    ✓ 线上解析完成（{elapsed:.1f}s）：{file_name}")
+            break
+        except Exception as e:
+            wait = API_RETRY_BASE_DELAY * (2 ** attempt)
+            if attempt < API_MAX_RETRIES - 1:
+                print(f"  [警告] PDF 解析第 {attempt + 1} 次失败：{file_name} — {e}，"
+                      f"等待 {wait:.0f}s 后重试")
+                _time.sleep(wait)
+            else:
+                print(f"  [错误] PDF 解析失败（已重试 {API_MAX_RETRIES} 次）：{file_name} — {e}")
+                return []
+
+    markdown    = api_result.get("md_results", "")
+    json_result = api_result.get("layout_details", None)
 
     if not markdown.strip():
-        print(f"  [警告] SDK 返回空 markdown：{file_name}")
+        print(f"  [警告] 返回空 markdown：{file_name}")
         return []
 
     # ── 3. 提取标题列表 ──────────────────────────────────────────────────────
@@ -1783,10 +1788,10 @@ def parse_pdf_sdk(file_record: dict) -> list:
 
     # ── 6. 图片区域处理 ──────────────────────────────────────────────────────
     image_sections = []
-    if json_result:
+    if json_result and img_base_dir is not None:
         try:
             doc = fitz.open(file_path)
-            image_sections = _extract_sdk_images(json_result, doc, file_record)
+            image_sections = _extract_sdk_images(json_result, doc, file_record, img_base_dir=img_base_dir)
         except Exception as e:
             print(f"  [警告] SDK 图片区域处理失败：{file_name} — {e}")
 
@@ -1963,18 +1968,20 @@ def _extract_pdf_images(doc, file_record: dict) -> List[dict]:
     1. 逐页遍历，对每页调用 page.get_images(full=True) 获取图片 xref
     2. 按 xref 去重（同一张图可能被多页引用）
     3. doc.extract_image(xref) 获取原始字节
-    4. 过滤（尺寸 + 字节）→ 转 PNG → resize → VLM 分类+描述
-    5. 若类型为 文档扫描件/表格截图 → 追加 OCR
-    6. 组装为 section dict
+    4. 收集所有待处理图片 → 并发调用 VLM 分类+描述（+OCR）
+    5. 组装为 section dict
 
     section_id 格式: "img_p{page}_{idx}"，区别于文本 section
     """
-    sections: List[dict] = []
     seen_xrefs: set = set()
     filename    = file_record.get("file_name", "")
     folder_code = file_record.get("folder_code")
     source_path = file_record.get("relative_path", filename)
     global_img_idx = 0  # 全局图片计数器
+
+    # Phase 1: 收集所有待处理的图片任务
+    image_tasks = []   # _process_single_image 参数
+    task_meta = []     # 每个任务对应的 (page_idx, global_img_idx)
 
     for page_idx, page in enumerate(doc):
         try:
@@ -1996,33 +2003,41 @@ def _extract_pdf_images(doc, file_record: dict) -> List[dict]:
                 img_ext   = base_image.get("ext", "png")
 
                 png_bytes, w, h = _to_png_bytes(raw_bytes, img_ext)
-                text = _process_single_image(
-                    png_bytes, w, h,
-                    filename=filename,
-                    page=str(page_idx + 1),
-                    idx=global_img_idx,
-                    folder_code=folder_code,
-                    source_path=source_path,
-                )
-                global_img_idx += 1
-
-                if text is None:
-                    continue
-
-                sections.append({
-                    "section_id":    f"img_p{page_idx + 1}_{global_img_idx}",
-                    "page_or_sheet": str(page_idx + 1),
-                    "text":          text,
-                    "section_title": "",
+                image_tasks.append({
+                    "png_bytes": png_bytes,
+                    "width": w,
+                    "height": h,
+                    "filename": filename,
+                    "page": str(page_idx + 1),
+                    "idx": global_img_idx,
+                    "folder_code": folder_code,
+                    "source_path": source_path,
                 })
+                task_meta.append((page_idx, global_img_idx))
+                global_img_idx += 1
 
             except Exception:
                 continue  # 单张图片失败不影响其他
 
+    # Phase 2: 并发处理（VLM 分类+描述 → 可能追加 OCR）
+    results = _process_images_batch(image_tasks)
+
+    # Phase 3: 组装 section 列表
+    sections: List[dict] = []
+    for (page_idx, img_idx), text in zip(task_meta, results):
+        if text is None:
+            continue
+        sections.append({
+            "section_id":    f"img_p{page_idx + 1}_{img_idx + 1}",
+            "page_or_sheet": str(page_idx + 1),
+            "text":          text,
+            "section_title": "",
+        })
+
     return sections
 
 
-def _extract_pdf_sections(file_record: dict) -> List[dict]:
+def _extract_pdf_sections(file_record: dict, img_base_dir: str | None = None) -> List[dict]:
     """
     PDF 文本提取：返回 section 列表（不分块）。含嵌入式图片提取。
 
@@ -2037,7 +2052,7 @@ def _extract_pdf_sections(file_record: dict) -> List[dict]:
 
         if route == "sdk":
             # SDK 路径：文本 + 图片处理已内含在 parse_pdf_sdk 中
-            sections = parse_pdf_sdk(file_record)
+            sections = parse_pdf_sdk(file_record, img_base_dir=img_base_dir)
         else:
             # PyMuPDF 路径：完全不变
             sections = parse_normal_pdf(doc)
@@ -2301,11 +2316,14 @@ def _extract_docx_images(file_path: str, file_record: dict) -> List[dict]:
     """
     import zipfile
 
-    sections: List[dict] = []
     filename    = file_record.get("file_name", "")
     folder_code = file_record.get("folder_code")
     source_path = file_record.get("relative_path", filename)
     _IMG_EXTS = {"png", "jpg", "jpeg", "bmp", "tiff", "gif"}
+
+    # Phase 1: 收集图片任务
+    image_tasks = []
+    task_indices = []  # 对应的 idx
 
     try:
         with zipfile.ZipFile(file_path, "r") as zf:
@@ -2321,28 +2339,36 @@ def _extract_docx_images(file_path: str, file_record: dict) -> List[dict]:
                     media_ext = media_path.rsplit(".", 1)[-1].lower()
 
                     png_bytes, w, h = _to_png_bytes(raw_bytes, media_ext)
-                    text = _process_single_image(
-                        png_bytes, w, h,
-                        filename=filename,
-                        page="1",
-                        idx=idx,
-                        folder_code=folder_code,
-                        source_path=source_path,
-                    )
-
-                    if text is None:
-                        continue
-
-                    sections.append({
-                        "section_id":    f"img_d_{idx + 1}",
-                        "page_or_sheet": "1",
-                        "text":          text,
-                        "section_title": "",
+                    image_tasks.append({
+                        "png_bytes": png_bytes,
+                        "width": w,
+                        "height": h,
+                        "filename": filename,
+                        "page": "1",
+                        "idx": idx,
+                        "folder_code": folder_code,
+                        "source_path": source_path,
                     })
+                    task_indices.append(idx)
                 except Exception:
                     continue
     except Exception:
         pass  # ZIP 打开失败（可能不是有效 DOCX）
+
+    # Phase 2: 并发处理
+    results = _process_images_batch(image_tasks)
+
+    # Phase 3: 组装 section 列表
+    sections: List[dict] = []
+    for idx, text in zip(task_indices, results):
+        if text is None:
+            continue
+        sections.append({
+            "section_id":    f"img_d_{idx + 1}",
+            "page_or_sheet": "1",
+            "text":          text,
+            "section_title": "",
+        })
 
     return sections
 
@@ -2672,12 +2698,15 @@ def _extract_pptx_images(prs, file_record: dict) -> List[dict]:
     """
     import hashlib
 
-    sections: List[dict] = []
     filename    = file_record.get("file_name", "")
     folder_code = file_record.get("folder_code")
     source_path = file_record.get("relative_path", filename)
     seen_hashes: set = set()
     global_counter = [0]  # 用列表便于闭包修改
+
+    # Phase 1: 收集图片任务
+    image_tasks = []
+    task_meta = []  # (slide_idx, counter_value)
 
     def _collect_pictures(shapes_iter, slide_idx: int):
         for shape in shapes_iter:
@@ -2690,26 +2719,20 @@ def _extract_pptx_images(prs, file_record: dict) -> List[dict]:
                     seen_hashes.add(blob_hash)
 
                     png_bytes, w, h = _to_png_bytes(blob)
-                    text = _process_single_image(
-                        png_bytes, w, h,
-                        filename=filename,
-                        page=str(slide_idx + 1),
-                        idx=global_counter[0],
-                        folder_code=folder_code,
-                        source_path=source_path,
-                    )
-                    global_counter[0] += 1
-
-                    if text is None:
-                        continue
-
-                    sections.append({
-                        "section_id":    f"img_s{slide_idx + 1}_{global_counter[0]}",
-                        "page_or_sheet": str(slide_idx + 1),
-                        "text":          text,
-                        "section_title": "",
+                    image_tasks.append({
+                        "png_bytes": png_bytes,
+                        "width": w,
+                        "height": h,
+                        "filename": filename,
+                        "page": str(slide_idx + 1),
+                        "idx": global_counter[0],
+                        "folder_code": folder_code,
+                        "source_path": source_path,
                     })
-                except Exception:
+                    global_counter[0] += 1
+                    task_meta.append((slide_idx, global_counter[0]))
+                except Exception as e:
+                    print(f"[WARN] 跳过 PPTX 图片（slide {slide_idx + 1}）：{e}")
                     continue
             elif shape.shape_type == 6:  # GROUP — 递归展开
                 try:
@@ -2719,6 +2742,21 @@ def _extract_pptx_images(prs, file_record: dict) -> List[dict]:
 
     for i, slide in enumerate(prs.slides):
         _collect_pictures(slide.shapes, i)
+
+    # Phase 2: 并发处理
+    results = _process_images_batch(image_tasks)
+
+    # Phase 3: 组装 section 列表
+    sections: List[dict] = []
+    for (slide_idx, counter_val), text in zip(task_meta, results):
+        if text is None:
+            continue
+        sections.append({
+            "section_id":    f"img_s{slide_idx + 1}_{counter_val}",
+            "page_or_sheet": str(slide_idx + 1),
+            "text":          text,
+            "section_title": "",
+        })
 
     return sections
 
@@ -2915,7 +2953,7 @@ _SECTION_EXTRACTOR_MAP = {
 }
 
 
-def extract_sections(file_record: dict) -> list[dict] | None:
+def extract_sections(file_record: dict, img_base_dir: str | None = None) -> list[dict] | None:
     """
     纯文本提取：返回 section 列表（不分块）。
     按文件扩展名分发到对应的 _extract_xxx_sections 函数。
@@ -2928,6 +2966,8 @@ def extract_sections(file_record: dict) -> list[dict] | None:
     extractor = _SECTION_EXTRACTOR_MAP.get(ext)
     if extractor is None:
         return None
+    if ext == ".pdf":
+        return extractor(file_record, img_base_dir=img_base_dir)
     return extractor(file_record)
 
 

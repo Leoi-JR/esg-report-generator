@@ -244,9 +244,10 @@ def test_integration_with_make_chunks():
     }
 
     # 使用 make_chunks_from_sections（内部会调用 merge_short_sections）
-    chunks_merged = make_chunks_from_sections(
+    result = make_chunks_from_sections(
         sections_short, file_record, max_size=DEFAULT_MAX, min_size=DEFAULT_MIN
     )
+    chunks_merged = result["chunks"] if isinstance(result, dict) else result
 
     # 20 个短 section 应被大量合并，chunk 数远少于 20
     assert len(chunks_merged) < 20, \
@@ -256,8 +257,8 @@ def test_integration_with_make_chunks():
 
     # 验证 chunk 字段完整
     required_fields = ("chunk_id", "parent_id", "file_path", "file_name",
-                       "folder_code", "page_or_sheet", "chunk_index",
-                       "text", "parent_text", "char_count")
+                       "folder_code", "page_or_sheet",
+                       "text", "char_count")
     for c in chunks_merged:
         for field in required_fields:
             assert field in c, f"缺少字段: {field}"

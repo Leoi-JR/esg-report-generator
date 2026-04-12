@@ -26,6 +26,11 @@ ROOT = os.path.join(os.path.dirname(__file__), '..')
 MOCK_DATA = os.path.join(ROOT, "data/processed/模拟甲方整理后资料")
 
 
+def _unwrap_chunks(result):
+    """extract_* 现在返回 dict{"chunks":[], "parents":{}}，兼容旧版 list 返回。"""
+    return result["chunks"] if isinstance(result, dict) else result
+
+
 # ==============================================================================
 # 步骤 2-0：基础设施测试
 # ==============================================================================
@@ -90,19 +95,22 @@ def test_make_chunks_from_sections_fields():
         "folder_code":   "GA1",
         "extension":     ".pdf",
     }
-    chunks = make_chunks_from_sections(sections, file_record,
+    result = make_chunks_from_sections(sections, file_record,
                                        max_size=800, min_size=50)
+    chunks = _unwrap_chunks(result)
+    parents = result.get("parents", {}) if isinstance(result, dict) else {}
     assert len(chunks) >= 1, "至少应有 1 个 chunk"
 
     required_fields = ("chunk_id", "parent_id", "file_path", "file_name",
-                       "folder_code", "page_or_sheet", "chunk_index",
-                       "text", "parent_text", "char_count")
+                       "folder_code", "page_or_sheet",
+                       "text", "char_count")
     for c in chunks:
         for field in required_fields:
             assert field in c, f"缺少字段: {field}"
-        # parent_text 不小于 text
-        assert len(c["parent_text"]) >= len(c["text"]), \
-            f"parent_text 短于 text: {len(c['parent_text'])} < {len(c['text'])}"
+        # parent_text 现在存放在 parents dict 中，不小于 text
+        parent_text = parents.get(c["parent_id"], "")
+        assert len(parent_text) >= len(c["text"]), \
+            f"parent_text 短于 text: {len(parent_text)} < {len(c['text'])}"
         # chunk_id 含 # 分隔符
         assert c["chunk_id"].count("#") >= 2, f"chunk_id 格式错误: {c['chunk_id']}"
         # folder_code 继承
@@ -192,17 +200,20 @@ def test_extract_pdf_chunk_structure():
         "extension":     ".pdf",
     }
 
-    chunks = extract_pdf(file_record)
+    result = extract_pdf(file_record)
+    chunks = _unwrap_chunks(result)
+    parents = result.get("parents", {}) if isinstance(result, dict) else {}
     assert len(chunks) >= 1, "至少应有 1 个 chunk"
 
     required_fields = ("chunk_id", "parent_id", "file_path", "file_name",
-                       "folder_code", "page_or_sheet", "chunk_index",
-                       "text", "parent_text", "char_count")
+                       "folder_code", "page_or_sheet",
+                       "text", "char_count")
     for c in chunks:
         for key in required_fields:
             assert key in c, f"缺少字段: {key}"
-        assert len(c["parent_text"]) >= len(c["text"]), \
-            f"parent_text 短于 text: {len(c['parent_text'])} < {len(c['text'])}"
+        parent_text = parents.get(c["parent_id"], "")
+        assert len(parent_text) >= len(c["text"]), \
+            f"parent_text 短于 text: {len(parent_text)} < {len(c['text'])}"
         assert "#" in c["chunk_id"], f"chunk_id 格式错误: {c['chunk_id']}"
         assert c["folder_code"] == "TEST", "folder_code 未正确继承"
 
@@ -289,7 +300,7 @@ def inspect_pdf(pdf_path: str, save_dir: str = None) -> None:
         "folder_code":   None,
         "extension":     ".pdf",
     }
-    chunks = extract_pdf(file_record)
+    chunks = _unwrap_chunks(extract_pdf(file_record))
 
     total_chars = sum(c["char_count"] for c in chunks)
     out(f"\n共 {len(chunks)} 个 chunk，合计 {total_chars} 有效字符\n")

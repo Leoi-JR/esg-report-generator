@@ -36,7 +36,6 @@ from config import (
     DRAFT_LLM_MODEL,
     DRAFT_MAX_RETRIES,
     TABLE_CONTEXT_CHARS,
-    TABLE_SUMMARY_CACHE_PATH,
     TABLE_SUMMARY_CONCURRENCY,
     ENABLE_TABLE_SUMMARY,
 )
@@ -319,6 +318,7 @@ async def generate_table_summaries(
     chunks: list,
     parents: dict,
     enable: bool = ENABLE_TABLE_SUMMARY,
+    cache_path: str | None = None,
 ) -> list:
     """
     为所有表格 chunk 批量生成摘要，更新相关字段。
@@ -327,6 +327,7 @@ async def generate_table_summaries(
         chunks: 所有 chunk 列表
         parents: {parent_id: parent_text} 字典
         enable: 是否启用（False 时直接返回原列表）
+        cache_path: 缓存文件路径（企业专属路径，None 时不缓存）
 
     返回:
         更新后的 chunks 列表
@@ -349,7 +350,7 @@ async def generate_table_summaries(
         return chunks
 
     # 批量生成摘要
-    summarizer = TableSummarizer(cache_path=TABLE_SUMMARY_CACHE_PATH)
+    summarizer = TableSummarizer(cache_path=cache_path)
     summaries = await summarizer.summarize_batch(table_chunks, parents)
 
     # 更新 chunk 字段
@@ -382,10 +383,11 @@ def generate_table_summaries_sync(
     chunks: list,
     parents: dict,
     enable: bool = ENABLE_TABLE_SUMMARY,
+    cache_path: str | None = None,
 ) -> list:
     """
     同步版本的表格摘要生成。
 
     内部使用 asyncio.run() 调用异步实现。
     """
-    return asyncio.run(generate_table_summaries(chunks, parents, enable))
+    return asyncio.run(generate_table_summaries(chunks, parents, enable, cache_path=cache_path))

@@ -15,12 +15,11 @@ ESG 报告初稿自动生成 — 步骤 1-4：双路语义检索 + Reranking。
   步骤 1 → 双路 embedding（retrieval_query 加前缀，hypothetical_doc 不加）
   步骤 2 → 候选池过滤（top1 ≥ 0.40）+ 矩阵点积相似度粗排（双路）
   步骤 3 → Max 融合 + bi-encoder top-N 粗选 + parent_id 去重（默认 N=50）
-  步骤 4 → Qwen3-Reranker-8B 精排 → 最终 top-K（默认 K=10）
+  步骤 4 → DashScope qwen3-rerank 精排 → 最终 top-K（默认 K=10）
 
-Reranker 服务（需预先启动，GPU3 端口 8083）：
-  CUDA_VISIBLE_DEVICES=3 conda run -n ocr python3 src/reranker_server.py
+Reranker 通过 DashScope SDK 直接调用（无需额外启动服务）。
 
-不带 --rerank 参数时跳过步骤 4，仅执行步骤 1-3（兼容无 reranker 环境）。
+不带 --rerank 参数时跳过步骤 4，仅执行步骤 1-3。
 
 输出：
   data/processed/report_draft/retrieval_results.json  — 结构化检索结果（含双路分数）
@@ -30,7 +29,7 @@ Reranker 服务（需预先启动，GPU3 端口 8083）：
   # 仅 bi-encoder（步骤 1-3）
   conda run -n esg python3 src/generate_report_draft.py
 
-  # bi-encoder + reranker（步骤 1-4，需 reranker 服务运行中）
+  # bi-encoder + reranker（步骤 1-4，通过 DashScope SDK 直接调用）
   conda run -n esg python3 src/generate_report_draft.py --rerank
 
   # 调整粗排/精排数量
@@ -48,19 +47,18 @@ import numpy as np
 import pandas as pd
 import requests
 
+from progress_tracker import get_tracker
+
 # ── 本项目模块 ─────────────────────────────────────────────────────────────────
 from align_evidence import compute_embeddings
 from config import (
-    CHUNK_CACHE_PATH,
     DRAFT_BIENCODER_TOP_N,
     DRAFT_RERANKER_TOP_K,
-    EMB_CACHE_PATH,
     EMBEDDING_INSTRUCT,
     EMBEDDING_MODEL,
     MIN_RELEVANCE_SCORE,
     OPENAI_API_KEY,
     OPENAI_BASE_URL,
-    RERANKER_BASE_URL,
     RERANKER_INSTRUCT,
     # Phase 3: BM25 混合检索
     ENABLE_BM25,
@@ -68,6 +66,7 @@ from config import (
     RRF_K,
     # Reranker 默认开关
     ENABLE_RERANK,
+    get_paths,
 )
 from bm25_retriever import build_bm25_index, bm25_search_batch
 
@@ -86,9 +85,10 @@ OUTPUT_DIR = os.path.join(_ROOT, "data/processed/report_draft")
 # 步骤 1：加载框架查询 + 双路 Embedding
 # ==============================================================================
 
-def load_framework_queries() -> list[dict]:
+def load_framework_queries(framework_queries_path: str | None = None) -> list[dict]:
     """加载 framework_retrieval_queries.json，返回 119 条叶节点记录。"""
-    with open(FRAMEWORK_QUERIES_PATH, "r", encoding="utf-8") as f:
+    path = framework_queries_path or FRAMEWORK_QUERIES_PATH
+    with open(path, "r", encoding="utf-8") as f:
         queries = json.load(f)
     print(f"  ✓ 加载报告框架叶节点：{len(queries)} 条")
     return queries
@@ -114,11 +114,19 @@ def embed_queries_dual(queries: list[dict]) -> tuple[np.ndarray, np.ndarray]:
     - hypothetical_doc：不加前缀（document-document 相似度，符合 HyDE 原理）
 
     返回：
-        (rq_embs, hyde_embs)，均为 (N, 4096) numpy 数组，已 L2 归一化
+        (rq_embs, hyde_embs)，均为 (N, EMBEDDING_DIM) numpy 数组，已 L2 归一化
     """
     print(f"\n[步骤1] 双路 embedding 计算...")
 
     # ── 路径 1：retrieval_query（加 Instruct 前缀）──
+    # 若 retrieval_query 为 None，说明 Step 3 未成功生成，提前报错给出明确提示
+    none_rq = [q.get("id", i) for i, q in enumerate(queries) if not q.get("retrieval_query")]
+    if none_rq:
+        raise ValueError(
+            f"framework_retrieval_queries.json 中有 {len(none_rq)} 条节点的 retrieval_query 为空（如 {none_rq[:3]}...）。\n"
+            f"请先成功运行 Step 3（generate_retrieval_queries.py）再执行 Step 4。"
+        )
+
     rq_texts = []
     for q in queries:
         raw = q["retrieval_query"]
@@ -133,7 +141,6 @@ def embed_queries_dual(queries: list[dict]) -> tuple[np.ndarray, np.ndarray]:
         api_key=OPENAI_API_KEY,
         base_url=OPENAI_BASE_URL,
         model=EMBEDDING_MODEL,
-        batch_size=100,
         label="retrieval_query",
     )
     rq_matrix = np.array(rq_embeddings, dtype=np.float32)
@@ -141,7 +148,19 @@ def embed_queries_dual(queries: list[dict]) -> tuple[np.ndarray, np.ndarray]:
     print(f"       ✓ retrieval_query embedding：{rq_matrix.shape}")
 
     # ── 路径 2：hypothetical_doc（不加前缀，与文档同空间）──
-    hyde_texts = [q["hypothetical_doc"] for q in queries]
+    # 若 hypothetical_doc 为 None（LLM 生成失败的节点），回退使用 retrieval_query
+    hyde_texts = []
+    _hyde_fallback_count = 0
+    for q in queries:
+        hd = q.get("hypothetical_doc")
+        if hd and isinstance(hd, str) and hd.strip():
+            hyde_texts.append(hd)
+        else:
+            # retrieval_query 此处已保证非 None（路径 1 已做前置校验）
+            hyde_texts.append(q["retrieval_query"])
+            _hyde_fallback_count += 1
+    if _hyde_fallback_count:
+        print(f"  [警告] {_hyde_fallback_count} 条 hypothetical_doc 为空，已回退使用 retrieval_query")
 
     print(f"  [1b] hypothetical_doc（{len(hyde_texts)} 条，不加前缀 / HyDE 模式）...")
     hyde_embeddings = compute_embeddings(
@@ -149,7 +168,6 @@ def embed_queries_dual(queries: list[dict]) -> tuple[np.ndarray, np.ndarray]:
         api_key=OPENAI_API_KEY,
         base_url=OPENAI_BASE_URL,
         model=EMBEDDING_MODEL,
-        batch_size=100,
         label="hypothetical_doc",
     )
     hyde_matrix = np.array(hyde_embeddings, dtype=np.float32)
@@ -163,12 +181,13 @@ def embed_queries_dual(queries: list[dict]) -> tuple[np.ndarray, np.ndarray]:
 # 步骤 2：加载候选池 + 相似度计算
 # ==============================================================================
 
-def _find_latest_alignment_table() -> str:
+def _find_latest_alignment_table(alignment_glob: str | None = None) -> str:
     """glob 匹配 对齐表_*.xlsx，按文件名日期降序取最新版本。"""
-    matches = sorted(glob.glob(ALIGNMENT_TABLE_GLOB), reverse=True)
+    pattern = alignment_glob or ALIGNMENT_TABLE_GLOB
+    matches = sorted(glob.glob(pattern), reverse=True)
     if not matches:
         raise FileNotFoundError(
-            f"未找到对齐表文件：{ALIGNMENT_TABLE_GLOB}\n"
+            f"未找到对齐表文件：{pattern}\n"
             "请先运行 align_evidence.py 生成对齐表。"
         )
     return matches[0]
@@ -190,7 +209,11 @@ def _parse_top1_score(semantic_top5: str) -> float:
         return 0.0
 
 
-def load_candidate_pool() -> tuple[list[dict], np.ndarray, dict]:
+def load_candidate_pool(
+    chunk_cache_path: str | None = None,
+    emb_cache_path: str | None = None,
+    alignment_glob: str | None = None,
+) -> tuple[list[dict], np.ndarray, dict]:
     """
     加载文本块及其 embedding，过滤低质量块，返回候选池。
 
@@ -202,29 +225,27 @@ def load_candidate_pool() -> tuple[list[dict], np.ndarray, dict]:
     返回：
       (candidate_chunks, candidate_embs, parents)
       - candidate_chunks: 候选 chunk 记录列表
-      - candidate_embs:   对应 embedding 矩阵 (N_candidates, 4096)
+      - candidate_embs:   对应 embedding 矩阵 (N_candidates, EMBEDDING_DIM)
       - parents:          {parent_id: parent_text} 字典（Phase 1 新结构）
     """
-    # ── 加载 chunks_cache.json（Phase 1 新结构：{parents, chunks}）──
+    chunk_path = chunk_cache_path
+    emb_path   = emb_cache_path
+
+    # ── 加载 chunks_cache.json（{parents, chunks}）──
     print(f"\n[步骤2] 加载候选池...")
-    with open(CHUNK_CACHE_PATH, "r", encoding="utf-8") as f:
+    with open(chunk_path, "r", encoding="utf-8") as f:
         cache_data = json.load(f)
 
-    # 兼容旧格式（列表）和新格式（字典）
-    if isinstance(cache_data, list):
-        all_chunks = cache_data
-        parents = {}
-    else:
-        all_chunks = cache_data.get("chunks", [])
-        parents = cache_data.get("parents", {})
+    all_chunks = cache_data.get("chunks", [])
+    parents = cache_data.get("parents", {})
 
     print(f"  文本块总数：{len(all_chunks)}")
     if parents:
         print(f"  parents 条数：{len(parents)}")
 
     # ── 加载 embedding 缓存 ──
-    data = np.load(EMB_CACHE_PATH)
-    all_embs = data["embeddings"]      # (7074, 4096) float32
+    data = np.load(emb_path)
+    all_embs = data["embeddings"]      # (N, EMBEDDING_DIM) float32
     valid_mask = data["valid_mask"]     # (7074,) bool
     print(f"  embedding 矩阵：{all_embs.shape}，有效：{int(valid_mask.sum())}")
 
@@ -235,7 +256,7 @@ def load_candidate_pool() -> tuple[list[dict], np.ndarray, dict]:
         )
 
     # ── 加载对齐表，提取 top1 score ──
-    alignment_path = _find_latest_alignment_table()
+    alignment_path = _find_latest_alignment_table(alignment_glob)
     print(f"  对齐表：{os.path.basename(alignment_path)}")
 
     df = pd.read_excel(alignment_path, sheet_name="Sheet1")
@@ -726,37 +747,56 @@ def select_topk(
 # 步骤 4：Reranker 精排
 # ==============================================================================
 
-def _call_reranker(query: str, documents: list[str], base_url: str) -> list[float]:
+def _call_reranker(query: str, documents: list[str]) -> list[float]:
     """
-    调用 reranker_server.py 的 /rerank 接口，返回与 documents 等长的分数列表。
+    调用 DashScope qwen3-rerank API，返回与 documents 等长的分数列表。
 
-    分数为 0-1 概率值，越高越相关。
-    发生网络错误或服务不可用时抛出异常。
+    分数为 0-1 的相关性概率，越高越相关。
+    内置重试逻辑：失败自动重试 3 次，指数退避。
     """
-    url = f"{base_url.rstrip('/')}/rerank"
-    payload = {
-        "query": query,
-        "documents": documents,
-        "task": RERANKER_INSTRUCT,
-    }
-    resp = requests.post(url, json=payload, timeout=120)
-    resp.raise_for_status()
-    data = resp.json()
-    # results 列表与 documents 顺序一一对应
-    scores = [item["score"] for item in data["results"]]
-    return scores
+    import dashscope
+    from http import HTTPStatus
+    from config import DASHSCOPE_API_KEY
+
+    dashscope.api_key = DASHSCOPE_API_KEY
+
+    max_retries = 3
+    for attempt in range(max_retries):
+        try:
+            resp = dashscope.TextReRank.call(
+                model="qwen3-rerank",
+                query=query,
+                documents=documents,
+                instruct=RERANKER_INSTRUCT,
+                return_documents=False,
+            )
+
+            if resp.status_code != HTTPStatus.OK:
+                error_msg = getattr(resp, "message", str(resp))
+                raise RuntimeError(f"DashScope Rerank API 错误: {error_msg}")
+
+            # DashScope 返回按 relevance_score 降序 — 映射回原始 documents 顺序
+            score_map = {item["index"]: item["relevance_score"] for item in resp.output["results"]}
+            return [round(score_map.get(i, 0.0), 6) for i in range(len(documents))]
+
+        except Exception as e:
+            if attempt < max_retries - 1:
+                delay = (attempt + 1) * 2
+                print(f"  [警告] Reranker 第 {attempt + 1} 次失败：{e}，{delay}s 后重试")
+                time.sleep(delay)
+            else:
+                raise
 
 
 def rerank_results(
     results: list[dict],
     final_k: int = DRAFT_RERANKER_TOP_K,
-    reranker_url: str = RERANKER_BASE_URL,
 ) -> list[dict]:
     """
     对步骤 3 的粗排结果做 reranker 精排，将每个叶节点的 top_chunks 缩减到 final_k。
 
     步骤 3 输出的 top_chunks 数量 = DRAFT_BIENCODER_TOP_N（粗排候选），
-    本函数用 Qwen3-Reranker-8B 对每对 (retrieval_query, chunk_text) 打分，
+    本函数用 DashScope qwen3-rerank 对每对 (retrieval_query, chunk_text) 打分，
     按分数降序重新排列，取前 final_k 条。
 
     字段变化：
@@ -773,7 +813,6 @@ def rerank_results(
     参数：
         results      - select_topk() 的输出（粗排结果）
         final_k      - 精排后保留的 chunk 数
-        reranker_url - reranker 服务地址
 
     返回：
         更新后的 results 列表（in-place 修改 top_chunks，其余字段不变）
@@ -786,9 +825,14 @@ def rerank_results(
     # 全局排名变化统计
     global_rank_changes = {"improved": 0, "declined": 0, "unchanged": 0}
 
+    # Phase 1: 预处理——保存粗排状态、收集 reranker 调用任务
+    rerank_tasks = []  # (qi, r, query_text, documents, biencoder_stats)
+    skip_indices = set()
+
     for qi, r in enumerate(results):
         chunks = r["top_chunks"]
         if not chunks:
+            skip_indices.add(qi)
             continue
 
         # 保存粗排阶段的统计信息
@@ -811,16 +855,41 @@ def rerank_results(
             f"检索描述：{r['retrieval_query']}"
         )
         documents = [c["text"] for c in chunks]
+        rerank_tasks.append((qi, r, query_text, documents, biencoder_stats))
 
-        try:
-            reranker_scores = _call_reranker(query_text, documents, reranker_url)
-            n_api_calls += 1
-        except Exception as e:
-            print(f"  ⚠ [{qi+1}/{len(results)}] {r['leaf_title']} reranker 调用失败：{e}")
+    # Phase 2: 并发调用 reranker
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+    from config import RERANKER_CONCURRENCY
+
+    rerank_results_map = {}  # qi -> reranker_scores or Exception
+
+    with ThreadPoolExecutor(max_workers=RERANKER_CONCURRENCY) as pool:
+        future_to_task = {
+            pool.submit(_call_reranker, t[2], t[3]): t
+            for t in rerank_tasks
+        }
+        for future in as_completed(future_to_task):
+            task = future_to_task[future]
+            qi = task[0]
+            try:
+                rerank_results_map[qi] = future.result()
+            except Exception as e:
+                rerank_results_map[qi] = e
+
+    # Phase 3: 处理结果（保持原有排序/统计逻辑）
+    for qi, r, query_text, documents, biencoder_stats in rerank_tasks:
+        chunks = r["top_chunks"]
+        reranker_result = rerank_results_map.get(qi)
+
+        if isinstance(reranker_result, Exception):
+            print(f"  ⚠ [{qi+1}/{len(results)}] {r['leaf_title']} reranker 调用失败：{reranker_result}")
             print(f"     跳过精排，保留粗排结果前 {final_k} 条")
             r["top_chunks"] = chunks[:final_k]
             _update_stats_with_biencoder(r, biencoder_stats, global_rank_changes, skipped=True)
             continue
+
+        reranker_scores = reranker_result
+        n_api_calls += 1
 
         # 将 reranker 分数绑定到对应 chunk
         for chunk, rs in zip(chunks, reranker_scores):
@@ -1286,7 +1355,7 @@ def main():
     )
     parser.add_argument(
         "--rerank", action="store_true", default=None,
-        help="启用 Reranker 精排（步骤 4），需 reranker_server.py 运行在 8083 端口"
+        help="启用 Reranker 精排（步骤 4，通过 DashScope qwen3-rerank API）"
     )
     parser.add_argument(
         "--no-rerank", action="store_true",
@@ -1304,7 +1373,38 @@ def main():
         "--top-k", type=int, default=DRAFT_RERANKER_TOP_K,
         help=f"最终保留的 chunk 数（默认 {DRAFT_RERANKER_TOP_K}）"
     )
+    parser.add_argument(
+        "--tracker", type=str, default=None,
+        help="Web UI 进度追踪 run_id（内部使用）"
+    )
+    parser.add_argument(
+        "--project-dir",
+        type=str,
+        default=None,
+        metavar="DIR",
+        help=(
+            "企业项目目录（如 projects/艾森股份_2025）。"
+            "不传则使用旧的 data/ 路径（向后兼容）。"
+        ),
+    )
     args = parser.parse_args()
+
+    # ── 路径初始化（多企业支持，向后兼容）────────────────────────────────────
+    paths = get_paths(args.project_dir)
+    paths.draft_output_dir.mkdir(parents=True, exist_ok=True)
+
+    framework_queries_path = str(paths.framework_queries)
+    alignment_glob         = paths.alignment_glob
+    output_dir             = str(paths.draft_output_dir)
+    chunk_cache_path       = str(paths.chunk_cache)
+    emb_cache_path         = str(paths.emb_cache)
+
+    # Web UI 进度追踪
+    tracker = get_tracker(args, "generate_report_draft")
+
+    # 耗时统计
+    from stage_timer import StageTimer
+    timer = StageTimer()
 
     print_header()
     t0 = time.time()
@@ -1338,11 +1438,15 @@ def main():
     print()
 
     # ── 步骤 1：加载框架查询 + 双路 Embedding ──
-    queries = load_framework_queries()
+    timer.start("步骤 1-2：Embedding + 相似度")
+    tracker.set_stage("Dual embedding")
+    queries = load_framework_queries(framework_queries_path)
     rq_embs, hyde_embs = embed_queries_dual(queries)
 
     # ── 步骤 2：加载候选池 + 双路相似度计算 ──
-    candidate_chunks, candidate_embs, parents = load_candidate_pool()
+    candidate_chunks, candidate_embs, parents = load_candidate_pool(
+        chunk_cache_path, emb_cache_path, alignment_glob
+    )
     scores_rq, scores_hyde, scores_fused = compute_dual_similarity(
         rq_embs, hyde_embs, candidate_embs
     )
@@ -1350,13 +1454,17 @@ def main():
     # ── 步骤 2.5（Phase 3 新增）：BM25 检索 ──
     bm25_results = None
     if use_bm25:
+        timer.start("步骤 2.5：BM25 稀疏检索")
         print(f"\n[步骤2.5] BM25 稀疏检索...")
+        tracker.set_stage("BM25 scoring", total=len(queries))
         build_bm25_index(candidate_chunks)
         bm25_queries = [q["retrieval_query"] for q in queries]
         bm25_results = bm25_search_batch(bm25_queries, top_n=BM25_TOP_N)
         print(f"  ✓ 完成 {len(queries)} 个查询的 BM25 检索（每查询 top-{BM25_TOP_N}）")
 
     # ── 步骤 3：三路/双路融合 + Top-N 粗排 ──
+    timer.start("步骤 3：RRF 融合粗排")
+    tracker.set_stage("RRF fusion", total=len(queries))
     results = select_topk_rrf(
         scores_rq, scores_hyde, bm25_results,
         candidate_chunks, queries, k=biencoder_n
@@ -1364,18 +1472,21 @@ def main():
 
     # ── 步骤 4：Reranker 精排（可选）──
     if use_rerank:
+        timer.start("步骤 4：Reranker 精排")
+        tracker.set_stage("Reranker", total=len(results))
         results = rerank_results(results, final_k=final_k)
 
     # ── 保存输出 ──
+    timer.start("输出结果")
     print(f"\n{'─' * 50}")
     print("输出阶段")
-    save_retrieval_results(results, OUTPUT_DIR)
-    write_evaluation_sample(results, OUTPUT_DIR)
+    save_retrieval_results(results, output_dir)
+    write_evaluation_sample(results, output_dir)
 
     elapsed = time.time() - t0
-    print(f"\n{'═' * 50}")
-    print(f"  完成！总耗时 {elapsed:.1f} 秒")
-    print(f"{'═' * 50}")
+    timer.report()
+    print(f"  总耗时 {elapsed:.1f} 秒")
+    tracker.complete()
 
 
 if __name__ == "__main__":

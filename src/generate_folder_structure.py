@@ -443,12 +443,60 @@ def generate_folder_structure(company_name, reference_excel, output_dir, pack_zi
 # ==============================================================================
 
 def main():
-    generate_folder_structure(
-        company_name    = COMPANY_NAME,
-        reference_excel = REFERENCE_EXCEL,
-        output_dir      = OUTPUT_DIR,
-        pack_zip        = PACK_ZIP,
-    )
+    """
+    CLI 入口：支持两种运行方式。
+
+    1. 无参数（向后兼容）：使用文件顶部的硬编码配置
+       python3 generate_folder_structure.py
+
+    2. 带参数（Web 调用）：所有参数通过 CLI 传入，stdout 输出 JSON
+       python3 generate_folder_structure.py \
+         --company-name "艾森股份" \
+         --reference-excel "path/to/清单.xlsx" \
+         --output-dir "/tmp/output"
+    """
+    import argparse
+    import json
+
+    # 检查是否有 CLI 参数（排除脚本名本身）
+    if len(sys.argv) > 1:
+        parser = argparse.ArgumentParser(
+            description="生成 ESG 标准文件夹结构 ZIP"
+        )
+        parser.add_argument(
+            "--company-name", required=True,
+            help="公司名称，如 艾森股份"
+        )
+        parser.add_argument(
+            "--reference-excel", required=True,
+            help="定性清单 Excel 路径"
+        )
+        parser.add_argument(
+            "--output-dir", required=True,
+            help="输出目录（ZIP 将写入此目录）"
+        )
+        args = parser.parse_args()
+
+        try:
+            zip_path = generate_folder_structure(
+                company_name=args.company_name,
+                reference_excel=args.reference_excel,
+                output_dir=args.output_dir,
+                pack_zip=True,
+            )
+            print(json.dumps({"success": True, "zip_path": str(zip_path)}))
+            sys.exit(0)
+        except Exception as e:
+            print(json.dumps({"success": False, "error": str(e)}), file=sys.stderr)
+            sys.exit(1)
+    else:
+        # 向后兼容：使用模块顶部配置
+        generate_folder_structure(
+            company_name=COMPANY_NAME,
+            reference_excel=REFERENCE_EXCEL,
+            output_dir=OUTPUT_DIR,
+            pack_zip=PACK_ZIP,
+        )
 
 
 if __name__ == "__main__":

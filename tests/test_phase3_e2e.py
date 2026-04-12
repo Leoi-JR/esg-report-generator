@@ -38,7 +38,6 @@ from extractors import (
     extract_xlsx, extract_xls,
     extract_ppt,
     extract_image,
-    configure_glmocr,
 )
 from align_evidence import (
     load_indicator_details,
@@ -47,8 +46,8 @@ from align_evidence import (
     embed_chunks,
 )
 from config import (
-    GLM_OCR_BASE_URL, GLM_OCR_MODEL,
     OPENAI_API_KEY, OPENAI_BASE_URL, EMBEDDING_MODEL,
+    EMBEDDING_DIM,
     CHROMA_PERSIST_DIR,
 )
 
@@ -130,8 +129,7 @@ def run_e2e():
     print("  阶段三端到端验证 — 快速模式（~10 个文件）")
     print("═" * 55)
 
-    # 初始化 GLM-OCR 配置（图片 / 扫描件需要，此处服务可能未启动，允许失败）
-    configure_glmocr(GLM_OCR_BASE_URL, GLM_OCR_MODEL)
+    # GLM-OCR 已切换至智谱线上 API，无需手动配置
 
     # ── Step 1：加载指标详情 ──────────────────────────────────────────────
     _sep("Step 1 / 4  加载指标详情映射")
@@ -241,7 +239,7 @@ def run_e2e():
     if embs is not None and len(embs) > 0 and embs[0] is not None and len(embs[0]) > 0:
         dim = len(embs[0])
         print(f"  ✓ 向量维度检查（GA1）：{dim} 维"
-              f"{'（✓ 符合 Qwen3-Embedding-8B）' if dim == 4096 else f'（警告：预期 4096，实际 {dim}）'}")
+              f"{'（✓ 符合预期维度）' if dim == EMBEDDING_DIM else f'（警告：预期 {EMBEDDING_DIM}，实际 {dim}）'}")
     else:
         print("  [警告] 无法取回 GA1 的 embedding 做维度检查")
 
@@ -267,7 +265,7 @@ def run_e2e():
     if valid_nonempty:
         sample_emb = valid_nonempty[0]["embedding"]
         print(f"     样本维度：{len(sample_emb)} 维"
-              f"{'（✓）' if len(sample_emb) == 4096 else f'（警告：预期 4096）'}")
+              f"{'（✓）' if len(sample_emb) == EMBEDDING_DIM else f'（警告：预期 {EMBEDDING_DIM}）'}")
 
     # ── Step 4：复用检测验证 ──────────────────────────────────────────────
     _sep("Step 4 / 4  复用检测（第二次调用应跳过重建）")

@@ -1,6 +1,11 @@
 # ── 数据目录（原始资料 + 处理缓存，体积大） ─────────────────────────────
 data/
 
+# ── 多企业项目数据目录（各企业的 raw/ 和 processed/，体积大） ────────────
+# 仅忽略数据文件，projects/ 目录结构本身可提交（用于记录项目约定）
+projects/*/raw/
+projects/*/processed/
+
 # ── 临时实验目录（OCR 对比测试生成的结果文件） ───────────────────────────
 temp/result_*
 temp/result_method2_full/
@@ -11,6 +16,9 @@ __pycache__/
 *.py[cod]
 *.egg-info/
 .pytest_cache/
+
+# ── Pipeline 进度文件（Python 写入，Node.js 轮询） ──────────────────────
+src/.progress/
 
 # ── Web 平台 ──────────────────────────────────────────────────────────────
 web/node_modules/
@@ -32,6 +40,11 @@ web/data/*.db-wal
 *.swp
 *.swo
 *~
+
+# ── 环境变量（含 API Key，不提交） ───────────────────────────────────────
+.env
+.env.local
+.env.production
 
 # ── 系统文件 ─────────────────────────────────────────────────────────────
 .DS_Store
