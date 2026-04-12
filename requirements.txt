@@ -1,0 +1,62 @@
+# ESG Pipeline — Python 依赖
+# Python 3.11
+#
+# 安装方式（推荐）：
+#   conda create -n esg python=3.11 -y
+#   conda activate esg
+#   pip install -r requirements.txt
+#
+# 注意：torch / torchvision 等 GPU 包已排除，按需单独安装。
+# LibreOffice（DOC/PPT 转换）需系统级安装：
+#   apt-get install -y libreoffice
+
+# ── 文档解析 ──────────────────────────────────────────────────────────────────
+PyMuPDF==1.27.2          # PDF 解析
+python-docx==1.2.0       # DOCX 解析
+python-pptx==1.0.2       # PPTX 解析
+openpyxl==3.1.5          # XLSX 读写
+xlrd==2.0.2              # XLS 读取（旧格式）
+xlsxwriter==3.2.9        # XLSX 写入
+lxml==6.0.2              # XML/HTML 解析
+pillow==12.1.1           # 图片处理
+
+# ── 数据处理 ──────────────────────────────────────────────────────────────────
+pandas==3.0.1
+numpy==2.4.3
+tabulate==0.10.0         # pandas to_markdown() 依赖
+scikit-learn==1.8.0
+scipy==1.17.1
+
+# ── NLP / 检索 ────────────────────────────────────────────────────────────────
+jieba==0.42.1            # 中文分词（BM25）
+rank-bm25==0.2.2         # BM25 检索
+sentence-transformers==5.3.0
+transformers==5.3.0
+tokenizers==0.22.2
+sentencepiece==0.2.1
+
+# ── 向量数据库 ────────────────────────────────────────────────────────────────
+chromadb==1.5.5
+
+# ── AI 服务 SDK ───────────────────────────────────────────────────────────────
+dashscope==1.25.15       # Embedding / Reranker / VLM（阿里云）
+openai==2.28.0           # LLM OpenAI 兼容接口
+glmocr==0.1.4            # 智谱 GLM-OCR
+
+# ── HTTP / 异步 ───────────────────────────────────────────────────────────────
+httpx==0.28.1
+requests==2.32.5
+aiohttp==3.13.5
+tenacity==9.1.4          # 重试
+
+# ── 工具 ──────────────────────────────────────────────────────────────────────
+python-dotenv==1.2.2     # .env 文件读取
+tqdm==4.67.3             # 进度条
+rich==14.3.3             # 终端美化输出
+pydantic==2.12.5
+PyYAML==6.0.3
+regex==2026.2.28
+opencv-python-headless==4.13.0.92
+
+# ── 测试 ──────────────────────────────────────────────────────────────────────
+pytest==9.0.2

@@ -1,0 +1,58 @@
+name: esg
+channels:
+  - defaults
+  - conda-forge
+dependencies:
+  - python=3.11
+  - pip
+  - pip:
+    # ── 文档解析 ──────────────────────────────────────────────
+    - PyMuPDF==1.27.2
+    - python-docx==1.2.0
+    - python-pptx==1.0.2
+    - openpyxl==3.1.5
+    - xlrd==2.0.2
+    - xlsxwriter==3.2.9
+    - lxml==6.0.2
+    - pillow==12.1.1
+
+    # ── 数据处理 ──────────────────────────────────────────────
+    - pandas==3.0.1
+    - numpy==2.4.3
+    - tabulate==0.10.0
+    - scikit-learn==1.8.0
+    - scipy==1.17.1
+
+    # ── NLP / 检索 ────────────────────────────────────────────
+    - jieba==0.42.1
+    - rank-bm25==0.2.2
+    - sentence-transformers==5.3.0
+    - transformers==5.3.0
+    - tokenizers==0.22.2
+    - sentencepiece==0.2.1
+
+    # ── 向量数据库 ────────────────────────────────────────────
+    - chromadb==1.5.5
+
+    # ── AI 服务 SDK ───────────────────────────────────────────
+    - dashscope==1.25.15
+    - openai==2.28.0
+    - glmocr==0.1.4
+
+    # ── HTTP / 异步 ───────────────────────────────────────────
+    - httpx==0.28.1
+    - requests==2.32.5
+    - aiohttp==3.13.5
+    - tenacity==9.1.4
+
+    # ── 工具 ──────────────────────────────────────────────────
+    - python-dotenv==1.2.2
+    - tqdm==4.67.3
+    - rich==14.3.3
+    - pydantic==2.12.5
+    - PyYAML==6.0.3
+    - regex==2026.2.28
+    - opencv-python-headless==4.13.0.92
+
+    # ── 测试 ──────────────────────────────────────────────────
+    - pytest==9.0.2
