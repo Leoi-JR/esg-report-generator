@@ -1,16 +1,19 @@
 import Database from 'better-sqlite3';
 import path from 'path';
+import fs from 'fs';
 
 // Singleton database instance
 let db: Database.Database | null = null;
 
 /** Current schema version. Bump when adding migrations. */
-const SCHEMA_VERSION = 2;
+const SCHEMA_VERSION = 3;
 
 export function getDb(): Database.Database {
   if (db) return db;
 
   const dbPath = path.join(process.cwd(), 'data', 'esg_editor.db');
+  // 确保父目录存在（新环境 clone 后 web/data/ 可能不存在）
+  fs.mkdirSync(path.dirname(dbPath), { recursive: true });
   db = new Database(dbPath);
 
   // Enable WAL mode for better concurrent read performance
@@ -152,6 +155,28 @@ export function getDb(): Database.Database {
       db.exec('ROLLBACK');
       throw e;
     }
+  }
+
+  // ── V3: Playground Prompts ──
+  if (currentVersion < 3) {
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS playground_prompts (
+        id            INTEGER PRIMARY KEY AUTOINCREMENT,
+        project_id    TEXT    NOT NULL DEFAULT 'default',
+        chapter_id    TEXT    NOT NULL,
+        version_name  TEXT    NOT NULL DEFAULT '版本1',
+        system_prompt TEXT    NOT NULL DEFAULT '',
+        user_prompt   TEXT    NOT NULL DEFAULT '',
+        last_output   TEXT,
+        last_run_at   TEXT,
+        is_active     INTEGER NOT NULL DEFAULT 0,
+        created_at    TEXT    NOT NULL,
+        updated_at    TEXT    NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_pg_project_chapter ON playground_prompts(project_id, chapter_id);
+    `);
+    db.pragma('user_version = 3');
+    console.log('[DB] Migrated schema to version 3 (playground_prompts)');
   }
 
   // ── 列级迁移（幂等，用 try/catch 忽略"列已存在"错误）──
@@ -556,4 +581,135 @@ export function deleteProjectData(projectId: string): {
   }
 
   return result;
+}
+
+// ─── Playground Prompts CRUD ───
+
+export interface PlaygroundPrompt {
+  id: number;
+  project_id: string;
+  chapter_id: string;
+  version_name: string;
+  system_prompt: string;
+  user_prompt: string;
+  last_output: string | null;
+  last_run_at: string | null;
+  is_active: number;  // 0 | 1
+  created_at: string;
+  updated_at: string;
+}
+
+/** 获取章节的所有版本（按创建时间升序）*/
+export function getPlaygroundVersions(projectId: string, chapterId: string): PlaygroundPrompt[] {
+  const db = getDb();
+  return db.prepare(
+    'SELECT * FROM playground_prompts WHERE project_id = ? AND chapter_id = ? ORDER BY id ASC'
+  ).all(projectId, chapterId) as PlaygroundPrompt[];
+}
+
+/** 新建版本。初始 prompt 优先复制 is_active=1 版本，否则读 src/prompts/ 文件。*/
+export function createPlaygroundVersion(
+  projectId: string,
+  chapterId: string,
+  versionName: string
+): PlaygroundPrompt {
+  const db = getDb();
+  const now = new Date().toISOString();
+
+  // 找现有 active 版本
+  const active = db.prepare(
+    'SELECT * FROM playground_prompts WHERE project_id = ? AND chapter_id = ? AND is_active = 1'
+  ).get(projectId, chapterId) as PlaygroundPrompt | undefined;
+
+  let systemPrompt = '';
+  let userPrompt = '';
+
+  if (active) {
+    systemPrompt = active.system_prompt;
+    userPrompt = active.user_prompt;
+  } else {
+    // 从文件系统读取默认模板
+    try {
+      const fs = require('fs') as typeof import('fs');
+      const promptsDir = path.resolve(process.cwd(), '..', 'src', 'prompts');
+      const sysPath = path.join(promptsDir, 'draft_system.txt');
+      const userPath = path.join(promptsDir, 'draft_user.txt');
+      if (fs.existsSync(sysPath)) systemPrompt = fs.readFileSync(sysPath, 'utf-8');
+      if (fs.existsSync(userPath)) userPrompt = fs.readFileSync(userPath, 'utf-8');
+    } catch {
+      // 读取失败时保持空字符串，前端会提示
+    }
+  }
+
+  const result = db.prepare(`
+    INSERT INTO playground_prompts
+      (project_id, chapter_id, version_name, system_prompt, user_prompt, is_active, created_at, updated_at)
+    VALUES (?, ?, ?, ?, ?, 0, ?, ?)
+  `).run(projectId, chapterId, versionName, systemPrompt, userPrompt, now, now);
+
+  return db.prepare('SELECT * FROM playground_prompts WHERE id = ?').get(Number(result.lastInsertRowid)) as PlaygroundPrompt;
+}
+
+/** 更新版本名称或 prompt 内容（不更新 last_output）*/
+export function updatePlaygroundVersion(
+  id: number,
+  fields: Partial<Pick<PlaygroundPrompt, 'version_name' | 'system_prompt' | 'user_prompt'>>
+): PlaygroundPrompt {
+  const db = getDb();
+  const now = new Date().toISOString();
+  const setClauses: string[] = ['updated_at = ?'];
+  const values: (string | number)[] = [now];
+
+  if (fields.version_name !== undefined) { setClauses.push('version_name = ?'); values.push(fields.version_name); }
+  if (fields.system_prompt !== undefined) { setClauses.push('system_prompt = ?'); values.push(fields.system_prompt); }
+  if (fields.user_prompt !== undefined)   { setClauses.push('user_prompt = ?');   values.push(fields.user_prompt); }
+
+  values.push(id);
+  db.prepare(`UPDATE playground_prompts SET ${setClauses.join(', ')} WHERE id = ?`).run(...values);
+  return db.prepare('SELECT * FROM playground_prompts WHERE id = ?').get(id) as PlaygroundPrompt;
+}
+
+/** 保存 LLM 运行输出 */
+export function savePlaygroundOutput(id: number, output: string): void {
+  const db = getDb();
+  const now = new Date().toISOString();
+  db.prepare(
+    'UPDATE playground_prompts SET last_output = ?, last_run_at = ?, updated_at = ? WHERE id = ?'
+  ).run(output, now, now, id);
+}
+
+/** 采用版本：同章节所有版本 is_active=0，然后将 versionId 设为 1 */
+export function activatePlaygroundVersion(
+  projectId: string,
+  chapterId: string,
+  versionId: number
+): void {
+  const db = getDb();
+  const now = new Date().toISOString();
+  db.prepare(
+    'UPDATE playground_prompts SET is_active = 0, updated_at = ? WHERE project_id = ? AND chapter_id = ?'
+  ).run(now, projectId, chapterId);
+  db.prepare(
+    'UPDATE playground_prompts SET is_active = 1, updated_at = ? WHERE id = ?'
+  ).run(now, versionId);
+}
+
+/** 删除版本。已采用版本（is_active=1）拒绝删除。*/
+export function deletePlaygroundVersion(id: number): void {
+  const db = getDb();
+  const row = db.prepare('SELECT is_active FROM playground_prompts WHERE id = ?').get(id) as { is_active: number } | undefined;
+  if (!row) return;
+  if (row.is_active === 1) throw new Error('无法删除已采用的版本，请先采用其他版本');
+  db.prepare('DELETE FROM playground_prompts WHERE id = ?').run(id);
+}
+
+/** 获取章节当前已采用的 prompt（供 Phase 2 generate_draft.py 读取）*/
+export function getActivePlaygroundPrompt(
+  projectId: string,
+  chapterId: string
+): PlaygroundPrompt | undefined {
+  const db = getDb();
+  return db.prepare(
+    'SELECT * FROM playground_prompts WHERE project_id = ? AND chapter_id = ? AND is_active = 1'
+  ).get(projectId, chapterId) as PlaygroundPrompt | undefined;
 }

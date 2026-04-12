@@ -238,6 +238,24 @@ export const Toolbar: React.FC = () => {
 
             <span style={{ color: 'var(--border)', fontSize: '16px', fontWeight: 300, lineHeight: 1, userSelect: 'none', flexShrink: 0 }}>/</span>
 
+            <Link
+              href={`/playground?project=${encodeURIComponent(activeProject || '')}`}
+              style={{
+                fontSize: '12px', color: 'var(--text-3)',
+                padding: '3px 7px', borderRadius: 'var(--radius-sm)',
+                textDecoration: 'none',
+                display: 'flex', alignItems: 'center', gap: '3px',
+                flexShrink: 0,
+                transition: 'background 0.15s, color 0.15s',
+              }}
+              onMouseEnter={e => { (e.currentTarget as HTMLAnchorElement).style.background = 'var(--bg-warm)'; (e.currentTarget as HTMLAnchorElement).style.color = 'var(--text-1)'; }}
+              onMouseLeave={e => { (e.currentTarget as HTMLAnchorElement).style.background = 'transparent'; (e.currentTarget as HTMLAnchorElement).style.color = 'var(--text-3)'; }}
+            >
+              Playground
+            </Link>
+
+            <span style={{ color: 'var(--border)', fontSize: '16px', fontWeight: 300, lineHeight: 1, userSelect: 'none', flexShrink: 0 }}>/</span>
+
             <span style={{
               fontSize: '12px', color: 'var(--text-1)', fontWeight: 500,
               padding: '3px 7px',

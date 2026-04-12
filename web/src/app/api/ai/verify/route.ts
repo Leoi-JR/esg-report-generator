@@ -2,9 +2,12 @@ import { NextRequest, NextResponse } from 'next/server';
 import { saveAIHistory } from '@/lib/db';
 import { buildPrompt } from '@/lib/prompt-loader';
 
-const LLM_BASE_URL = process.env.LLM_BASE_URL || 'http://127.0.0.1:8000';
-const LLM_API_KEY = process.env.LLM_API_KEY || 'sk-leoi-888';
-const LLM_MODEL = process.env.LLM_MODEL || 'deepseek-thinking';
+const LLM_API_KEY = process.env.LLM_API_KEY || '';
+const LLM_MODEL = process.env.LLM_MODEL || '';
+function getLLMBaseUrl() {
+  const u = (process.env.LLM_BASE_URL || '').replace(/\/$/, '');
+  return u.endsWith('/v1') ? u.slice(0, -3) : u;
+}
 
 export async function POST(request: NextRequest) {
   try {
@@ -28,7 +31,7 @@ export async function POST(request: NextRequest) {
     });
 
     // Call LLM
-    const llmResponse = await fetch(`${LLM_BASE_URL}/v1/chat/completions`, {
+    const llmResponse = await fetch(`${getLLMBaseUrl()}/v1/chat/completions`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
