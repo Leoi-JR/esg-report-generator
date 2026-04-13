@@ -17,6 +17,10 @@
 
 import { marked } from 'marked';
 import TurndownService from 'turndown';
+import {
+  SOURCE_TAG_CAPTURE,
+  parseSourceIds,
+} from '../source-patterns';
 
 // =============================================================================
 // Constants & Patterns
@@ -28,47 +32,15 @@ const SOURCE_PLACEHOLDER_SUFFIX = '\x00';
 const PENDING_PLACEHOLDER_PREFIX = '\x00PENDING:';
 const PENDING_PLACEHOLDER_SUFFIX = '\x00';
 
-// Regex patterns
-const SOURCE_TAG_PATTERN = /\[来源([\d,，\s\-–]+)\]/g;
+// 来源标签正则 — 引用 source-patterns.ts 中的统一定义
+const SOURCE_TAG_PATTERN = SOURCE_TAG_CAPTURE;
 const PENDING_BLOCK_PATTERN = /\[待补充[：:]([^\]]+)\]/g;
 
 // =============================================================================
 // Source Tag Helpers
 // =============================================================================
 
-/**
- * Parse source tag content into an array of individual source IDs.
- * Handles single IDs, comma-separated lists, and ranges.
- *
- * Examples:
- *   "3"       → [3]
- *   "1,4"     → [1, 4]
- *   "1, 8"    → [1, 8]
- *   "5-6"     → [5, 6]
- *   "2-5, 7"  → [2, 3, 4, 5, 7]
- */
-function parseSourceIds(raw: string): number[] {
-  const parts = raw.split(/[,，]/).map(s => s.trim()).filter(Boolean);
-  const ids: number[] = [];
-
-  for (const part of parts) {
-    const rangeMatch = part.match(/^(\d+)\s*[-–]\s*(\d+)$/);
-    if (rangeMatch) {
-      const start = parseInt(rangeMatch[1], 10);
-      const end = parseInt(rangeMatch[2], 10);
-      for (let i = start; i <= end; i++) {
-        ids.push(i);
-      }
-    } else {
-      const num = parseInt(part, 10);
-      if (!isNaN(num)) {
-        ids.push(num);
-      }
-    }
-  }
-
-  return ids;
-}
+// parseSourceIds — 从 source-patterns.ts 统一导入，不再在此重复定义
 
 /**
  * Generate HTML for source tags. Each source ID becomes a separate <sup> element.

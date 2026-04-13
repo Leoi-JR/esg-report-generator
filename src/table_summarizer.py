@@ -35,6 +35,7 @@ from config import (
     DRAFT_LLM_API_KEY,
     DRAFT_LLM_MODEL,
     DRAFT_MAX_RETRIES,
+    DRAFT_ENABLE_THINKING,
     TABLE_CONTEXT_CHARS,
     TABLE_SUMMARY_CONCURRENCY,
     ENABLE_TABLE_SUMMARY,
@@ -286,11 +287,13 @@ class TableSummarizer:
         for attempt in range(DRAFT_MAX_RETRIES):
             try:
                 self._api_calls += 1
+                extra_body = {"enable_thinking": True} if DRAFT_ENABLE_THINKING else {}
                 response = await self.client.chat.completions.create(
                     model=DRAFT_LLM_MODEL,
                     messages=[{"role": "user", "content": prompt}],
                     temperature=0.3,
                     max_tokens=500,
+                    extra_body=extra_body,
                 )
                 summary = response.choices[0].message.content.strip()
 

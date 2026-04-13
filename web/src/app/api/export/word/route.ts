@@ -9,6 +9,7 @@ import {
   PageBreak,
 } from 'docx';
 import { getAllEdits } from '@/lib/db';
+import { SOURCE_TAG_STRIP } from '@/lib/source-patterns';
 
 interface ChapterResult {
   id: string;
@@ -122,7 +123,7 @@ export async function POST(request: NextRequest) {
 
         // Remove source tags and clean up content
         const cleanContent = content
-          .replace(/\[来源[\d,]+\]/g, '')
+          .replace(SOURCE_TAG_STRIP, '')
           .replace(/\[待补充[：:][^\]]+\]/g, '[待补充]');
 
         const paragraphs = cleanContent.split('\n\n');

@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getAllEdits } from '@/lib/db';
+import { SOURCE_TAG_STRIP } from '@/lib/source-patterns';
 
 interface ChapterResult {
   id: string;
@@ -79,7 +80,7 @@ export async function POST(request: NextRequest) {
 
         // Clean up content - remove source tags
         const cleanContent = content
-          .replace(/\[来源[\d,]+\]/g, '')
+          .replace(SOURCE_TAG_STRIP, '')
           .replace(/\[待补充[：:]([^\]]+)\]/g, '**[待补充：$1]**');
 
         markdown += cleanContent + '\n\n';

@@ -2,20 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import fs from 'fs';
 import { resolveProjectPaths } from '@/lib/project-paths';
 import { savePlaygroundOutput } from '@/lib/db';
-
-// 在请求时动态读取，避免模块加载时 .env.local 尚未注入
-function getLLMConfig() {
-  const baseUrl = (process.env.LLM_BASE_URL || 'http://127.0.0.1:8000').replace(/\/$/, '');
-  const chatUrl = baseUrl.endsWith('/v1')
-    ? `${baseUrl}/chat/completions`
-    : `${baseUrl}/v1/chat/completions`;
-  return {
-    baseUrl,
-    chatUrl,
-    apiKey: process.env.LLM_API_KEY || '',
-    model:  process.env.LLM_MODEL   || '',
-  };
-}
+import { getLLMConfig } from '@/lib/llm-config';
 
 interface TopChunk {
   rank: number;
@@ -160,26 +147,28 @@ export async function POST(req: NextRequest) {
   });
 
   // 调用 LLM（stream: true）
-  const { chatUrl, apiKey, model } = getLLMConfig();
-  console.log('[playground/run] LLM config:', { chatUrl, model, keyPrefix: apiKey.slice(0, 8) });
+  const llmConfig = getLLMConfig();
+  console.log('[playground/run] LLM config:', { chatUrl: llmConfig.chatUrl, model: llmConfig.model, keyPrefix: llmConfig.apiKey.slice(0, 8) });
   let llmResponse: Response;
   try {
-    llmResponse = await fetch(chatUrl, {
+    llmResponse = await fetch(llmConfig.chatUrl, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'Authorization': `Bearer ${apiKey}`,
+        'Authorization': `Bearer ${llmConfig.apiKey}`,
       },
       body: JSON.stringify({
-        model: model,
+        model: llmConfig.model,
         messages: [
           { role: 'system', content: system_prompt || '' },
           { role: 'user',   content: filledUserPrompt },
         ],
         stream: true,
+        stream_options: { include_usage: true },
         temperature: 0.7,
+        enable_thinking: llmConfig.enableThinking,
       }),
-      signal: AbortSignal.timeout(120_000),
+      signal: AbortSignal.timeout(llmConfig.timeoutMs),
     });
   } catch (err: unknown) {
     console.error('[playground/run] fetch threw:', err);

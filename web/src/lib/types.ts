@@ -14,6 +14,8 @@ export interface Draft {
   word_count: number;
   cited_sources: string[];
   sources_mapping: Record<string, SourceMapping>;
+  citation_warning?: string | null;  // 引用密度提醒（后端 check_citation_density 生成）
+  no_content_analysis?: string | null;  // LLM 判断资料不足时的来源分析和补充建议
   token_usage?: {
     prompt: number;
     completion: number;

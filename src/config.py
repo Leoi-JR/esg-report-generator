@@ -254,17 +254,18 @@ VLM_CACHE_PATH = os.path.join(_ROOT, "data/processed/vlm_cache.json")
 # 注意：OpenAI SDK 要求 base_url 包含 /v1 后缀
 DRAFT_LLM_BASE_URL = os.environ.get("LLM_BASE_URL", "https://dashscope.aliyuncs.com/compatible-mode/v1")
 DRAFT_LLM_API_KEY  = os.environ.get("LLM_API_KEY") or os.environ.get("DASHSCOPE_API_KEY", "")
-DRAFT_LLM_MODEL    = os.environ.get("LLM_MODEL",    "deepseek-v3")
+DRAFT_LLM_MODEL    = os.environ.get("LLM_MODEL",    "deepseek-v3.2")
 
 # ── 并发与重试 ────────────────────────────────────────────────────────────────
 DRAFT_CONCURRENCY  = int(os.environ.get("DRAFT_CONCURRENCY", "6"))
-DRAFT_LLM_TIMEOUT  = float(os.environ.get("DRAFT_LLM_TIMEOUT", "120.0"))
+DRAFT_LLM_TIMEOUT  = float(os.environ.get("DRAFT_LLM_TIMEOUT", "300.0"))
 DRAFT_MAX_RETRIES  = int(os.environ.get("DRAFT_MAX_RETRIES", "3"))
 DRAFT_TEMPERATURE  = float(os.environ.get("DRAFT_TEMPERATURE", "0.3"))
 DRAFT_MAX_TOKENS   = int(os.environ.get("DRAFT_MAX_TOKENS", "2000"))
+DRAFT_ENABLE_THINKING = os.environ.get("DRAFT_ENABLE_THINKING", "true").lower() in ("true", "1", "yes")
 
 # ── 质量过滤与文本处理 ────────────────────────────────────────────────────────
-DRAFT_SCORE_THRESHOLD = float(os.environ.get("DRAFT_SCORE_THRESHOLD", "0.25"))
+DRAFT_SCORE_THRESHOLD = float(os.environ.get("DRAFT_SCORE_THRESHOLD", "0.50"))
 DRAFT_TEXT_LIMIT      = int(os.environ.get("DRAFT_TEXT_LIMIT", "2000"))
 
 # ── 输出路径 ──────────────────────────────────────────────────────────────────

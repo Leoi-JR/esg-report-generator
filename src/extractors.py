@@ -68,6 +68,7 @@ from config import (
     DRAFT_LLM_BASE_URL,
     DRAFT_LLM_API_KEY,
     DRAFT_LLM_MODEL,
+    DRAFT_ENABLE_THINKING,
     # 表格处理优化参数（Phase 1）
     TABLE_MAX_ROWS,
     SHORT_TEXT_THRESHOLD,
@@ -1398,11 +1399,13 @@ def _rebuild_title_levels_llm(titles: list, file_name: str = "") -> list:
             base_url=DRAFT_LLM_BASE_URL if DRAFT_LLM_BASE_URL.endswith("/v1")
                      else DRAFT_LLM_BASE_URL + "/v1",
         )
+        extra_body = {"enable_thinking": True} if DRAFT_ENABLE_THINKING else {}
         response = client.chat.completions.create(
             model=DRAFT_LLM_MODEL,
             messages=[{"role": "user", "content": prompt}],
             temperature=0.1,
             max_tokens=4096,
+            extra_body=extra_body,
         )
         raw_response = response.choices[0].message.content or ""
 

@@ -51,6 +51,7 @@ from config import (
     DRAFT_MAX_RETRIES,
     DRAFT_TEMPERATURE,
     DRAFT_MAX_TOKENS,
+    DRAFT_ENABLE_THINKING,
     DRAFT_SCORE_THRESHOLD,
     DRAFT_TEXT_LIMIT,
     DRAFT_OUTPUT_DIR,
@@ -230,20 +231,79 @@ def count_words(text: str) -> int:
 
 
 def extract_cited_sources(content: str) -> list[str]:
-    """从生成内容中提取引用的来源编号。"""
-    # 匹配 [来源1] [来源1,3] [来源1、2、3] 等格式
-    pattern = r'\[来源([\d,、]+)\]'
+    """从生成内容中提取引用的来源编号。
+
+    支持格式：[来源1]、[来源1,3]、[来源1、2、3]、[来源1-3]、[来源1,3-5]
+    """
+    pattern = r'\[来源([\d,，、\s\-–]+)\]'
     matches = re.findall(pattern, content)
 
     sources = set()
     for match in matches:
-        # 分割逗号和顿号
-        for part in re.split(r'[,、]', match):
+        # 按逗号/顿号/中文逗号分割
+        parts = re.split(r'[,，、]', match)
+        for part in parts:
             part = part.strip()
-            if part.isdigit():
+            # 尝试匹配 range 格式 (如 "3-5" 或 "3–5")
+            range_match = re.match(r'^(\d+)\s*[-–]\s*(\d+)$', part)
+            if range_match:
+                start = int(range_match.group(1))
+                end = int(range_match.group(2))
+                for i in range(start, end + 1):
+                    sources.add(str(i))
+            elif part.isdigit():
                 sources.add(part)
 
     return sorted(sources, key=int)
+
+
+# ── LLM 自主判断资料不足的标记 ──────────────────────────────────────────────
+NO_CONTENT_MARKER = "[NO_CONTENT]"
+
+
+def is_no_content(content: str) -> bool:
+    """检测 LLM 是否返回了资料不足标记。"""
+    stripped = content.strip()
+    return stripped == NO_CONTENT_MARKER or stripped.startswith(NO_CONTENT_MARKER)
+
+
+def extract_no_content_analysis(content: str) -> str:
+    """从 [NO_CONTENT] 响应中提取来源分析和补充建议。
+
+    LLM 可能返回：
+        [NO_CONTENT]
+
+        **已有资料概述：**
+        - 来源1：xxx
+        ...
+        **缺少的关键资料：**
+        - yyy
+        ...
+
+    返回 [NO_CONTENT] 之后的全部文本（去掉标记本身）。
+    """
+    stripped = content.strip()
+    if stripped.startswith(NO_CONTENT_MARKER):
+        analysis = stripped[len(NO_CONTENT_MARKER):].strip()
+        return analysis
+    return ""
+
+
+def check_citation_density(content: str, word_count: int) -> str | None:
+    """检查引用密度，返回提示信息或 None。
+
+    规则：每 200 字至少引用 1 个来源。
+    """
+    cited = extract_cited_sources(content)
+    if word_count <= 0:
+        return None
+    expected_min = max(1, word_count // 200)
+    if len(cited) < expected_min:
+        return (
+            f"引用密度偏低：{word_count} 字仅引用 {len(cited)} 个来源"
+            f"（建议至少 {expected_min} 个）"
+        )
+    return None
 
 
 # ==============================================================================
@@ -280,7 +340,8 @@ async def call_llm_async(
                 {"role": "user", "content": node["user_prompt"]}
             ],
             "temperature": DRAFT_TEMPERATURE,
-            "max_tokens": DRAFT_MAX_TOKENS
+            "max_tokens": DRAFT_MAX_TOKENS,
+            "enable_thinking": DRAFT_ENABLE_THINKING,
         }
 
         last_error = None
@@ -296,6 +357,8 @@ async def call_llm_async(
                 resp.raise_for_status()
                 data = resp.json()
 
+                # enable_thinking 时 content 仍在 message.content 中
+                # thinking 过程在 message.reasoning_content 中（可选提取）
                 content = data["choices"][0]["message"]["content"]
                 usage = data.get("usage", {})
 
@@ -681,7 +744,7 @@ async def main_async(args):
                 "full_path": node.get("full_path", ""),
                 "leaf_title": node.get("leaf_title", ""),
                 "status": "skipped",
-                "skip_reason": f"max_score ({max_score:.3f}) < {args.score_threshold}",
+                "skip_reason": f"low_relevance: 最高相关度 {max_score:.3f} 低于阈值 {args.score_threshold}",
                 "draft": {
                     "content": "",
                     "word_count": 0,
@@ -768,8 +831,31 @@ async def main_async(args):
             })
         else:
             content = llm_result["content"] or ""
+
+            # 检测 LLM 自主判断资料不足
+            if is_no_content(content):
+                no_content_analysis = extract_no_content_analysis(content)
+                skipped_nodes.append({
+                    "id": node["id"],
+                    "full_path": node["full_path"],
+                    "leaf_title": node["leaf_title"],
+                    "status": "skipped",
+                    "skip_reason": "insufficient_evidence: LLM 判断资料不足以支撑本章节撰写",
+                    "draft": {
+                        "content": "",
+                        "word_count": 0,
+                        "cited_sources": [],
+                        "sources_mapping": node["sources_mapping"],
+                        "token_usage": llm_result["token_usage"],
+                        "no_content_analysis": no_content_analysis or None,
+                    },
+                    "context_summary": node["context_summary"]
+                })
+                continue
+
             word_count = count_words(content)
             cited_sources = extract_cited_sources(content)
+            citation_warning = check_citation_density(content, word_count)
 
             generated_nodes.append({
                 "id": node["id"],
@@ -782,6 +868,7 @@ async def main_async(args):
                     "word_count": word_count,
                     "cited_sources": cited_sources,
                     "sources_mapping": node["sources_mapping"],
+                    "citation_warning": citation_warning,
                     "token_usage": llm_result["token_usage"]
                 },
                 "context_summary": node["context_summary"]

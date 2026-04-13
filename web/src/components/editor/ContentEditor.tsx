@@ -12,7 +12,7 @@ import { SourceTag } from '@/lib/tiptap/source-tag';
 import { PendingBlock } from '@/lib/tiptap/pending-block';
 import { contentToTiptapHTML, tiptapHTMLToContent } from '@/lib/tiptap/content-transform';
 import { EditorToolbar } from './EditorToolbar';
-import { FileText, AlertTriangle, Edit3 } from 'lucide-react';
+import { FileText, AlertTriangle, Edit3, Info } from 'lucide-react';
 
 /**
  * Validate content integrity: check that source tags are not corrupted.
@@ -318,20 +318,57 @@ export const ContentEditor: React.FC = () => {
         <div style={{ padding: '8px 24px', background: 'var(--amber-soft)', borderBottom: '1px solid var(--amber-border)', flexShrink: 0 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: 'var(--amber)', fontSize: '12px', fontFamily: 'var(--font-body)' }}>
             <AlertTriangle size={14} />
-            <span>此章节因资料不足而跳过：{currentChapter.skip_reason}</span>
+            <span>{
+              currentChapter.skip_reason?.startsWith('low_relevance')
+                ? `此章节因资料相关度不足而跳过（${currentChapter.skip_reason.split(': ').slice(1).join(': ')}）`
+                : currentChapter.skip_reason?.startsWith('insufficient_evidence')
+                ? '此章节因 LLM 判断资料不足以支撑撰写而跳过'
+                : `此章节已跳过：${currentChapter.skip_reason}`
+            }</span>
           </div>
+          {/* LLM 资料不足分析 — 展示来源摘要和补充建议 */}
+          {currentChapter.draft?.no_content_analysis && (
+            <div style={{
+              marginTop: '8px',
+              padding: '8px 12px',
+              background: 'var(--bg-card)',
+              borderRadius: 'var(--radius)',
+              fontSize: '12px',
+              lineHeight: '1.6',
+              color: 'var(--text-2)',
+              fontFamily: 'var(--font-body)',
+              whiteSpace: 'pre-wrap',
+            }}>
+              {currentChapter.draft.no_content_analysis}
+            </div>
+          )}
         </div>
       )}
 
       {/* Editor Toolbar */}
-      {currentChapter.status !== 'skipped' && currentChapter.draft && (
+      {currentChapter.draft && (
         <EditorToolbar editor={editor} />
       )}
 
       {/* Editor Content */}
       <div style={{ flex: 1, overflowY: 'auto' }}>
         {currentChapter.draft ? (
-          <EditorContent editor={editor} />
+          <>
+            <EditorContent editor={editor} />
+            {currentChapter.draft?.citation_warning && (
+              <div style={{
+                padding: '6px 24px',
+                fontSize: '11px',
+                color: 'var(--text-4)',
+                fontFamily: 'var(--font-body)',
+                borderTop: '1px solid var(--border-light)',
+                display: 'flex', alignItems: 'center', gap: '4px',
+              }}>
+                <Info size={12} />
+                <span>{currentChapter.draft.citation_warning}</span>
+              </div>
+            )}
+          </>
         ) : (
           <div style={{ padding: '32px 24px', textAlign: 'center', color: 'var(--text-4)' }}>
             <Edit3 size={32} style={{ margin: '0 auto 12px', opacity: 0.4 }} />

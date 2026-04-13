@@ -16,6 +16,7 @@ import {
   EyeOff,
 } from 'lucide-react';
 import type { PlaygroundPrompt } from '@/lib/db';
+import { SOURCE_TAG_SPLIT, SOURCE_TAG_CAPTURE, parseSourceIds } from '@/lib/source-patterns';
 
 // ─── 类型定义 ───
 
@@ -1160,14 +1161,15 @@ function parseOutputWithSources(
   text: string,
   chunkMap: Record<number, ChapterTopChunk>,
 ): React.ReactNode[] {
-  // 同时匹配单引用 [来源1] 和合并引用 [来源1,3,5]
-  const parts = text.split(/(\[来源[\d,\s]+\])/g);
+  // 使用统一的来源标签正则分割文本
+  const parts = text.split(SOURCE_TAG_SPLIT);
   let keyCounter = 0;
+  // 创建新的 RegExp 实例以安全匹配
+  const captureRe = new RegExp(SOURCE_TAG_CAPTURE.source);
   return parts.flatMap((part) => {
-    const m = part.match(/^\[来源([\d,\s]+)\]$/);
+    const m = part.match(captureRe);
     if (m) {
-      // 拆分为多个 rank
-      const ranks = m[1].split(',').map(s => Number(s.trim())).filter(n => !isNaN(n));
+      const ranks = parseSourceIds(m[1]);
       return ranks.map(rank => (
         <SourceTag key={`src-${keyCounter++}`} rank={rank} chunkMap={chunkMap} />
       ));
@@ -1258,13 +1260,13 @@ interface SourcePanelProps {
 /** 从输出文本里解析被引用的 rank 集合 */
 function parseCitedRanks(text: string): Set<number> {
   const cited = new Set<number>();
+  // 使用统一的来源标签正则
+  const re = new RegExp(SOURCE_TAG_CAPTURE.source, 'g');
   let m: RegExpExecArray | null;
-  const re = /\[来源([\d,\s]+)\]/g;
   while ((m = re.exec(text)) !== null) {
-    m[1].split(',').forEach((s: string) => {
-      const n = Number(s.trim());
-      if (!isNaN(n)) cited.add(n);
-    });
+    for (const id of parseSourceIds(m[1])) {
+      cited.add(id);
+    }
   }
   return cited;
 }

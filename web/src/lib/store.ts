@@ -435,14 +435,19 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
         fetch(`/api/data/draft${qs}`),
         fetch(`/api/data/chunks${qs}`),
       ]);
+
+      // 必须先设 chunks，再设 draft。
+      // 因为 setDraftResults 内部会调 selectChapter → getSourcesWithText，
+      // 需要 chunksCache 已经是最新的，否则所有来源都会显示 [原文未找到]。
+      if (chunksRes.ok) {
+        const chunksData = await chunksRes.json();
+        // API 返回直接的 ChunkRecord[]（与 editor/page.tsx 初始化一致）
+        const allChunks: ChunkRecord[] = Array.isArray(chunksData) ? chunksData : (chunksData.chunks ?? []);
+        get().setChunksCache(allChunks);
+      }
       if (draftRes.ok) {
         const draftData = await draftRes.json();
         get().setDraftResults(draftData);
-      }
-      if (chunksRes.ok) {
-        const chunksData = await chunksRes.json();
-        const allChunks: ChunkRecord[] = chunksData.chunks ?? [];
-        get().setChunksCache(allChunks);
       }
       set({ pipelineRunCompleted: false });
     } catch (err) {

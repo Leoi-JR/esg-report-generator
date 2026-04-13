@@ -21,7 +21,7 @@ ESG 报告框架 → Retrieval Query 自动生成工具（双查询版本）
   conda run -n esg python3 src/generate_retrieval_queries.py [选项]
 
 选项：
-  --model MODEL   LLM 模型名（默认: deepseek-thinking）
+  --model MODEL   LLM 模型名（默认: deepseek-v3.2）
   --dry-run       仅解析 Excel + 识别叶节点，不调用 LLM
   --resume        断点续跑，跳过已有结果的叶节点（使用生产模式）
   --debug         调试模式，遇到错误立即停止（默认首次运行开启）
@@ -62,12 +62,13 @@ PROMPT_HYDE = PROMPT_DIR / "retrieval_query_hyde.txt"
 # ── LLM 配置 ──────────────────────────────────────────────────────────────────
 LLM_BASE_URL = os.environ.get("LLM_BASE_URL", "https://dashscope.aliyuncs.com/compatible-mode/v1")
 LLM_API_KEY = os.environ.get("LLM_API_KEY") or os.environ.get("DASHSCOPE_API_KEY", "")
-DEFAULT_MODEL = "deepseek-v3"
+DEFAULT_MODEL = "deepseek-v3.2"
 
 # ── LLM 调用参数 ──────────────────────────────────────────────────────────────
 LLM_MAX_TOKENS = 8192  # 最大输出 token 数
 LLM_TEMPERATURE = 0.3  # 生成温度
-LLM_TIMEOUT = float(os.environ.get("LLM_TIMEOUT", "180"))  # 单次请求超时（秒）
+LLM_TIMEOUT = float(os.environ.get("LLM_TIMEOUT", "300"))  # 单次请求超时（秒）
+LLM_ENABLE_THINKING = os.environ.get("LLM_ENABLE_THINKING", "true").lower() in ("true", "1", "yes")
 LLM_CALL_RETRIES = 3   # 单次 call_llm 内部重试次数（网络/超时）
 LLM_RETRY_DELAY = 5    # 重试间隔（秒）
 
@@ -267,6 +268,7 @@ def call_llm(client: OpenAI, model: str, user_prompt: str) -> str | None:
     调用 LLM，返回文本内容。失败返回 None。
     内置重试逻辑：网络错误/超时自动重试 LLM_CALL_RETRIES 次。
     """
+    extra_body = {"enable_thinking": True} if LLM_ENABLE_THINKING else {}
     for attempt in range(LLM_CALL_RETRIES):
         try:
             resp = client.chat.completions.create(
@@ -276,6 +278,7 @@ def call_llm(client: OpenAI, model: str, user_prompt: str) -> str | None:
                 messages=[
                     {"role": "user", "content": user_prompt},
                 ],
+                extra_body=extra_body,
             )
             return resp.choices[0].message.content
         except Exception as e:
