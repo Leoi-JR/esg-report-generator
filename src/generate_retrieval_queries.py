@@ -665,6 +665,8 @@ def main():
         save_progress(progress, progress_json)
 
     # ── --retry-failed：替换 leaves 为失败节点，复用现有流程 ──
+    all_leaves = leaves      # 保存完整叶节点列表（输出阶段合并时使用）
+    existing_output = []     # 提升到块外，--retry-failed 时加载，否则为空
     if args.retry_failed:
         if not output_json.exists():
             print_progress(f"[错误] 输出文件不存在，无法重跑失败节点：{output_json}")
@@ -737,8 +739,18 @@ def main():
     print_progress("[输出] 生成最终 JSON...")
     tracker.set_stage("Validate")
 
+    # --retry-failed 模式：构建已有记录映射，输出阶段用于复用未重跑节点
+    existing_by_id = {e["id"]: e for e in existing_output} if existing_output else {}
+    # 本轮实际重跑的节点 id 集合
+    retried_ids = {n["id"] for n in leaves}
+
     output = []
-    for n in leaves:
+    for n in all_leaves:
+        if existing_by_id and n["id"] not in retried_ids:
+            # 本轮未重跑的节点：直接复用原有记录，跳过重建
+            output.append(existing_by_id[n["id"]])
+            continue
+
         entry = {
             "id": n["id"],
             "row": n["row"],
@@ -763,9 +775,11 @@ def main():
         else:
             entry["hypothetical_doc"] = None
 
-        # 标记需要人工审查的条目
+        # 标记需要人工审查的条目；重试成功则清除旧标记
         if entry["retrieval_query"] is None or entry["hypothetical_doc"] is None:
             entry["status"] = "needs_manual_review"
+        else:
+            entry.pop("status", None)  # 重试成功，移除旧的 needs_manual_review
 
         output.append(entry)
 
