@@ -923,6 +923,52 @@ async def main_async(args):
     tracker.complete()
 
 
+def run_draft(paths, resume=False, limit=None, tracker=None):
+    """
+    LLM 并发撰稿核心入口，可被 import 调用（Web 端、测试等）。
+
+    参数：
+        paths   - ProjectPaths（由 config.get_paths() 返回）
+        resume  - 断点续跑（跳过已生成的章节）
+        limit   - 仅处理前 N 个章节（None = 全量）
+        tracker - ProgressTracker 实例；None 时使用 NullTracker
+    """
+    import types
+    from progress_tracker import NullTracker
+
+    # 构造最小 args namespace（兼容 main_async 的字段访问）
+    args = types.SimpleNamespace(
+        project_dir=str(paths.project_dir),
+        input=None,
+        output_dir=None,
+        concurrency=DRAFT_CONCURRENCY,
+        score_threshold=DRAFT_SCORE_THRESHOLD,
+        text_limit=DRAFT_TEXT_LIMIT,
+        limit=limit,
+        dry_run=False,
+        debug=False,
+        resume=resume,
+        chapter_ids=None,
+        tracker=None,  # tracker 直接传入，不经由 get_tracker
+    )
+
+    if tracker is None:
+        tracker = NullTracker()
+
+    # 注入 tracker（main_async 通过 get_tracker(args, ...) 获取，此处直接替换）
+    import progress_tracker as _pt
+    _orig_get_tracker = _pt.get_tracker
+
+    def _patched_get_tracker(a, script_name):
+        return tracker
+
+    _pt.get_tracker = _patched_get_tracker
+    try:
+        asyncio.run(main_async(args))
+    finally:
+        _pt.get_tracker = _orig_get_tracker
+
+
 def main():
     """命令行入口。"""
     parser = argparse.ArgumentParser(
@@ -996,7 +1042,7 @@ def main():
         default=None,
         metavar="DIR",
         help=(
-            "企业项目目录（如 projects/艾森股份_2025）。"
+            "企业项目目录（如 projects/示例企业_2025）。"
             "不传则使用旧的 data/ 路径（向后兼容）。"
         ),
     )

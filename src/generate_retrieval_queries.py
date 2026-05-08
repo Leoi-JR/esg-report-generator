@@ -568,6 +568,154 @@ def cleanup_temp_files(progress_path: Path | None = None):
     return cleaned
 
 
+def run_retrieval_queries(paths, model=None, resume=False, tracker=None):
+    """
+    Retrieval Query 生成核心入口，可被 import 调用（Web 端、测试等）。
+
+    参数：
+        paths   - ProjectPaths（由 config.get_paths() 返回）
+        model   - LLM 模型名；None 时使用 DEFAULT_MODEL
+        resume  - 断点续跑（跳过已有结果的叶节点）
+        tracker - ProgressTracker 实例；None 时使用 NullTracker
+    """
+    from progress_tracker import NullTracker
+    if tracker is None:
+        tracker = NullTracker()
+    if model is None:
+        model = DEFAULT_MODEL
+
+    paths.processed_dir.mkdir(parents=True, exist_ok=True)
+
+    input_xlsx    = paths.framework_xlsx
+    output_json   = paths.framework_queries
+    progress_json = paths.rq_progress
+    progress_dir  = paths.processed_dir
+
+    from stage_timer import StageTimer
+    timer = StageTimer()
+
+    debug_mode = False  # importable 调用始终使用生产模式
+
+    print_progress(f"{'='*60}")
+    print_progress(f"ESG 报告框架 Retrieval Query 生成（双查询版本）")
+    print_progress(f"模型: {model}")
+    print_progress(f"输入: {input_xlsx}")
+    print_progress(f"输出: {output_json}")
+    print_progress(f"并发数: {MAX_CONCURRENT_REQUESTS}")
+    print_progress(f"模式: 生产模式（失败重试 {MAX_RETRIES} 次）")
+    print_progress(f"{'='*60}\n")
+
+    timer.start("阶段 1：解析 Excel")
+    tracker.set_stage("Parse Excel")
+    records = parse_excel(input_xlsx)
+
+    timer.start("阶段 2：识别叶节点")
+    tracker.set_stage("Identify leaves")
+    leaves = identify_leaves(records)
+
+    if not leaves:
+        print_progress("未找到任何叶节点，退出。")
+        return
+
+    client = OpenAI(
+        base_url=LLM_BASE_URL,
+        api_key=LLM_API_KEY,
+        timeout=LLM_TIMEOUT,
+    )
+
+    progress = {"retrieval_query": {}, "hypothetical_doc": {}}
+    if resume:
+        progress = load_progress(progress_json)
+        print_progress(f"  已加载历史进度: "
+                       f"retrieval_query={len(progress['retrieval_query'])} 条, "
+                       f"hypothetical_doc={len(progress['hypothetical_doc'])} 条")
+
+    def save_progress_callback():
+        save_progress(progress, progress_json)
+
+    prompt_base_query = load_prompt(PROMPT_BASE_QUERY)
+    prompt_hyde = load_prompt(PROMPT_HYDE)
+
+    timer.start("阶段 3：生成基础查询")
+    print_progress(f"\n{'='*60}")
+    print_progress("阶段 3: 生成基础查询 (retrieval_query)")
+    print_progress(f"{'='*60}")
+    tracker.set_stage("Base queries", total=len(leaves))
+
+    progress["retrieval_query"], failed_rq = run_generation_phase(
+        client=client, model=model, leaves=leaves,
+        result_map=progress["retrieval_query"],
+        instruction_prompt=prompt_base_query,
+        field_name="retrieval_query", phase_name="基础查询",
+        save_progress_callback=save_progress_callback,
+        debug_mode=debug_mode, progress_dir=progress_dir,
+    )
+    save_progress(progress, progress_json)
+
+    timer.start("阶段 4：生成假设文档")
+    print_progress(f"\n{'='*60}")
+    print_progress("阶段 4: 生成假设文档 (hypothetical_doc)")
+    print_progress(f"{'='*60}")
+    tracker.set_stage("HyDE docs", total=len(leaves))
+
+    progress["hypothetical_doc"], failed_hd = run_generation_phase(
+        client=client, model=model, leaves=leaves,
+        result_map=progress["hypothetical_doc"],
+        instruction_prompt=prompt_hyde,
+        field_name="hypothetical_doc", phase_name="假设文档",
+        save_progress_callback=save_progress_callback,
+        debug_mode=debug_mode, progress_dir=progress_dir,
+    )
+    save_progress(progress, progress_json)
+
+    timer.start("输出 JSON")
+    tracker.set_stage("Validate")
+
+    output = []
+    for n in leaves:
+        entry = {
+            "id": n["id"], "row": n["row"], "full_path": n["full_path"],
+            "leaf_title": n["leaf_title"], "l1": n["l1"], "l2": n["l2"],
+            "l3": n["l3"], "l4": n["l4"], "gloss": n["gloss"],
+            "retrieval_query": progress["retrieval_query"].get(n["id"]),
+            "hypothetical_doc": progress["hypothetical_doc"].get(n["id"]),
+        }
+        if entry["retrieval_query"] is None or entry["hypothetical_doc"] is None:
+            entry["status"] = "needs_manual_review"
+        output.append(entry)
+
+    output_json.parent.mkdir(parents=True, exist_ok=True)
+    with open(output_json, "w", encoding="utf-8") as f:
+        json.dump(output, f, ensure_ascii=False, indent=2)
+
+    total = len(output)
+    rq_ok = sum(1 for e in output if e.get("retrieval_query"))
+    hd_ok = sum(1 for e in output if e.get("hypothetical_doc"))
+    all_ok = sum(1 for e in output if e.get("retrieval_query") and e.get("hypothetical_doc"))
+    needs_review = total - all_ok
+
+    print_progress(f"\n{'='*60}")
+    print_progress(f"完成！共 {total} 个叶节点")
+    print_progress(f"  ✓ retrieval_query 成功: {rq_ok}/{total}")
+    print_progress(f"  ✓ hypothetical_doc 成功: {hd_ok}/{total}")
+    print_progress(f"  ✓ 全部完成: {all_ok}/{total}")
+    print_progress(f"  ⚠ 待人工审查: {needs_review}")
+    print_progress(f"输出文件: {output_json}")
+    print_progress(f"{'='*60}")
+
+    if needs_review == 0:
+        cleaned = cleanup_temp_files(progress_json)
+        if cleaned:
+            print_progress(f"  已清理临时文件: {', '.join(cleaned)}")
+
+    timer.report()
+    if needs_review > 0:
+        all_failed_ids = [n["id"] for n in failed_rq] + [n["id"] for n in failed_hd]
+        unique_failed = list(dict.fromkeys(all_failed_ids))
+        tracker.set_partial_failed(needs_review, unique_failed)
+    tracker.complete()
+
+
 def main():
     parser = argparse.ArgumentParser(description="ESG 报告框架 Retrieval Query 生成（双查询版本）")
     parser.add_argument("--model", default=DEFAULT_MODEL,
@@ -588,7 +736,7 @@ def main():
         default=None,
         metavar="DIR",
         help=(
-            "企业项目目录（如 projects/艾森股份_2025）。"
+            "企业项目目录（如 projects/示例企业_2025）。"
             "不传则使用旧的 data/ 路径（向后兼容）。"
         ),
     )

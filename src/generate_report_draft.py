@@ -50,7 +50,7 @@ import requests
 from progress_tracker import get_tracker
 
 # ── 本项目模块 ─────────────────────────────────────────────────────────────────
-from align_evidence import compute_embeddings
+from embedding_utils import compute_embeddings
 from config import (
     DRAFT_BIENCODER_TOP_N,
     DRAFT_RERANKER_TOP_K,
@@ -1349,6 +1349,98 @@ def print_header():
     print()
 
 
+def run_report_draft(paths, rerank=True, use_bm25=None, tracker=None):
+    """
+    三路混合检索核心入口，可被 import 调用（Web 端、测试等）。
+
+    参数：
+        paths    - ProjectPaths（由 config.get_paths() 返回）
+        rerank   - 是否启用 Reranker 精排（默认 True）
+        use_bm25 - 是否启用 BM25 第三路（None 时使用 config.ENABLE_BM25）
+        tracker  - ProgressTracker 实例；None 时使用 NullTracker
+    """
+    from progress_tracker import NullTracker
+    if tracker is None:
+        tracker = NullTracker()
+    if use_bm25 is None:
+        use_bm25 = ENABLE_BM25
+
+    paths.draft_output_dir.mkdir(parents=True, exist_ok=True)
+
+    framework_queries_path = str(paths.framework_queries)
+    alignment_glob         = paths.alignment_glob
+    output_dir             = str(paths.draft_output_dir)
+    chunk_cache_path       = str(paths.chunk_cache)
+    emb_cache_path         = str(paths.emb_cache)
+
+    from stage_timer import StageTimer
+    timer = StageTimer()
+
+    print_header()
+    t0 = time.time()
+
+    use_rerank  = rerank and ENABLE_RERANK
+    biencoder_n = DRAFT_BIENCODER_TOP_N if use_rerank else DRAFT_RERANKER_TOP_K
+    final_k     = DRAFT_RERANKER_TOP_K
+
+    mode_desc = (
+        f"{'三路 RRF' if use_bm25 else '双路 Max'} 粗排 top-{biencoder_n} → reranker 精排 top-{final_k}"
+        if use_rerank else
+        f"{'三路 RRF' if use_bm25 else '双路 Max'}，top-{final_k}（跳过 reranker）"
+    )
+    print(f"  模式：{mode_desc}")
+    if use_bm25:
+        print(f"  BM25：启用（RRF_K={RRF_K}，BM25_TOP_N={BM25_TOP_N}）")
+    else:
+        print(f"  BM25：禁用")
+    print()
+
+    timer.start("步骤 1-2：Embedding + 相似度")
+    tracker.set_stage("Dual embedding")
+    queries = load_framework_queries(framework_queries_path)
+    rq_embs, hyde_embs = embed_queries_dual(queries)
+
+    candidate_chunks, candidate_embs, parents = load_candidate_pool(
+        chunk_cache_path, emb_cache_path, alignment_glob
+    )
+    scores_rq, scores_hyde, scores_fused = compute_dual_similarity(
+        rq_embs, hyde_embs, candidate_embs
+    )
+
+    bm25_results = None
+    if use_bm25:
+        timer.start("步骤 2.5：BM25 稀疏检索")
+        print(f"\n[步骤2.5] BM25 稀疏检索...")
+        tracker.set_stage("BM25 scoring", total=len(queries))
+        build_bm25_index(candidate_chunks)
+        bm25_queries = [q["retrieval_query"] for q in queries]
+        bm25_results = bm25_search_batch(bm25_queries, top_n=BM25_TOP_N)
+        print(f"  ✓ 完成 {len(queries)} 个查询的 BM25 检索（每查询 top-{BM25_TOP_N}）")
+
+    timer.start("步骤 3：RRF 融合粗排")
+    tracker.set_stage("RRF fusion", total=len(queries))
+    results = select_topk_rrf(
+        scores_rq, scores_hyde, bm25_results,
+        candidate_chunks, queries, k=biencoder_n
+    )
+
+    if use_rerank:
+        timer.start("步骤 4：Reranker 精排")
+        tracker.set_stage("Reranker", total=len(results))
+        results = rerank_results(results, final_k=final_k)
+
+    timer.start("输出结果")
+    print(f"\n{'─' * 50}")
+    print("输出阶段")
+    save_retrieval_results(results, output_dir)
+    write_evaluation_sample(results, output_dir)
+
+    elapsed = time.time() - t0
+    timer.report()
+    print(f"  总耗时 {elapsed:.1f} 秒")
+    tracker.complete()
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="ESG 报告初稿生成 — 双路/三路语义检索 + Reranking"
@@ -1383,110 +1475,25 @@ def main():
         default=None,
         metavar="DIR",
         help=(
-            "企业项目目录（如 projects/艾森股份_2025）。"
+            "企业项目目录（如 projects/示例企业_2025）。"
             "不传则使用旧的 data/ 路径（向后兼容）。"
         ),
     )
     args = parser.parse_args()
 
-    # ── 路径初始化（多企业支持，向后兼容）────────────────────────────────────
     paths = get_paths(args.project_dir)
-    paths.draft_output_dir.mkdir(parents=True, exist_ok=True)
-
-    framework_queries_path = str(paths.framework_queries)
-    alignment_glob         = paths.alignment_glob
-    output_dir             = str(paths.draft_output_dir)
-    chunk_cache_path       = str(paths.chunk_cache)
-    emb_cache_path         = str(paths.emb_cache)
-
-    # Web UI 进度追踪
     tracker = get_tracker(args, "generate_report_draft")
 
-    # 耗时统计
-    from stage_timer import StageTimer
-    timer = StageTimer()
-
-    print_header()
-    t0 = time.time()
-
-    # 确定是否启用 BM25
-    use_bm25 = ENABLE_BM25 and not args.no_bm25
-
-    # 确定是否启用 Reranker（优先级：--no-rerank > --rerank > config.ENABLE_RERANK）
     if args.no_rerank:
         use_rerank = False
     elif args.rerank:
         use_rerank = True
     else:
-        use_rerank = ENABLE_RERANK  # 使用配置文件默认值
+        use_rerank = ENABLE_RERANK
 
-    # 确定粗排/精排数量
-    if use_rerank:
-        biencoder_n = args.biencoder_n   # 粗排拉取更多候选送 reranker
-        final_k     = args.top_k         # 精排后最终数量
-        mode_desc = f"{'三路 RRF' if use_bm25 else '双路 Max'} 粗排 top-{biencoder_n} → reranker 精排 top-{final_k}"
-    else:
-        biencoder_n = args.top_k         # 无 reranker：粗排直接给最终数量
-        final_k     = args.top_k
-        mode_desc = f"{'三路 RRF' if use_bm25 else '双路 Max'}，top-{final_k}（跳过 reranker）"
+    use_bm25 = ENABLE_BM25 and not args.no_bm25
 
-    print(f"  模式：{mode_desc}")
-    if use_bm25:
-        print(f"  BM25：启用（RRF_K={RRF_K}，BM25_TOP_N={BM25_TOP_N}）")
-    else:
-        print(f"  BM25：禁用")
-    print()
-
-    # ── 步骤 1：加载框架查询 + 双路 Embedding ──
-    timer.start("步骤 1-2：Embedding + 相似度")
-    tracker.set_stage("Dual embedding")
-    queries = load_framework_queries(framework_queries_path)
-    rq_embs, hyde_embs = embed_queries_dual(queries)
-
-    # ── 步骤 2：加载候选池 + 双路相似度计算 ──
-    candidate_chunks, candidate_embs, parents = load_candidate_pool(
-        chunk_cache_path, emb_cache_path, alignment_glob
-    )
-    scores_rq, scores_hyde, scores_fused = compute_dual_similarity(
-        rq_embs, hyde_embs, candidate_embs
-    )
-
-    # ── 步骤 2.5（Phase 3 新增）：BM25 检索 ──
-    bm25_results = None
-    if use_bm25:
-        timer.start("步骤 2.5：BM25 稀疏检索")
-        print(f"\n[步骤2.5] BM25 稀疏检索...")
-        tracker.set_stage("BM25 scoring", total=len(queries))
-        build_bm25_index(candidate_chunks)
-        bm25_queries = [q["retrieval_query"] for q in queries]
-        bm25_results = bm25_search_batch(bm25_queries, top_n=BM25_TOP_N)
-        print(f"  ✓ 完成 {len(queries)} 个查询的 BM25 检索（每查询 top-{BM25_TOP_N}）")
-
-    # ── 步骤 3：三路/双路融合 + Top-N 粗排 ──
-    timer.start("步骤 3：RRF 融合粗排")
-    tracker.set_stage("RRF fusion", total=len(queries))
-    results = select_topk_rrf(
-        scores_rq, scores_hyde, bm25_results,
-        candidate_chunks, queries, k=biencoder_n
-    )
-
-    # ── 步骤 4：Reranker 精排（可选）──
-    if use_rerank:
-        timer.start("步骤 4：Reranker 精排")
-        tracker.set_stage("Reranker", total=len(results))
-        results = rerank_results(results, final_k=final_k)
-
-    # ── 保存输出 ──
-    timer.start("输出结果")
-    print(f"\n{'─' * 50}")
-    print("输出阶段")
-    save_retrieval_results(results, output_dir)
-    write_evaluation_sample(results, output_dir)
-
-    elapsed = time.time() - t0
-    timer.report()
-    print(f"  总耗时 {elapsed:.1f} 秒")
-    tracker.complete()
+    run_report_draft(paths, rerank=use_rerank, use_bm25=use_bm25, tracker=tracker)
 
 
 if __name__ == "__main__":
