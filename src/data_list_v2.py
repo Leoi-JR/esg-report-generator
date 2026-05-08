@@ -1,5 +1,7 @@
 import os
 import re
+import sys
+import argparse
 import tempfile
 import warnings
 import pandas as pd
@@ -22,26 +24,10 @@ from esg_utils import (
     find_header_row_for_reference,
 )
 
-# ==============================================================================
-# 用户配置：只改这里
-# ==============================================================================
 _HERE = os.path.dirname(os.path.abspath(__file__))  # src/ 目录
 _ROOT = os.path.dirname(_HERE)                       # 项目根目录
 
-TARGET_FOLDER = os.path.join(_ROOT, 'data/processed/模拟甲方整理后资料')
-
-# 输出可以给”文件路径”或”文件夹路径”
-# 1) 文件路径示例：r”/Users/fhiwe/易董创新/ESG项目/焦作万方/焦作万方-资料索引.xlsx”
-# 2) 文件夹路径示例：r”/Users/fhiwe/易董创新/ESG项目/焦作万方”
-OUTPUT_EXCEL_OR_DIR = os.path.join(_ROOT, 'data/processed')
-
-REFERENCE_EXCEL = os.path.join(_ROOT, 'data/raw/资料收集清单-to艾森/【艾森股份】1-【定性】ESG报告资料清单.xlsx')
-
-REF_SEARCH_ROWS = 200
-CLEAR_FORMATS = True
-
 NULL = "null"
-# ==============================================================================
 
 
 # ==============================================================================
@@ -84,7 +70,7 @@ def load_esg_mapping_from_reference_excel(reference_excel_path: str,
         col_category = find_col_idx_by_keywords(df_raw, header_idx, ["类别", "维度"])
         col_code = find_col_idx_by_keywords(df_raw, header_idx, ["识别编码", "编码"])
 
-        # 只填充“议题/指标/类别/维度”，不填充“序号/编码”
+        # 只填充"议题/指标/类别/维度"，不填充"序号/编码"
         fill_cols_idx = []
         for kw in ["议题", "指标", "类别", "维度"]:
             idx = find_col_idx_by_keywords(df_raw, header_idx, [kw])
@@ -165,8 +151,6 @@ def load_esg_mapping_from_reference_excel(reference_excel_path: str,
 
 # ==============================================================================
 # 模块2：扫描文件夹时，从整条路径中提取最深层编码
-# - 先挑“映射内的编码”（更可信）
-# - 若路径里没有映射内编码，则回退到“路径最深层的编码”（仍写入识别编码，但匹配议题/指标为 null）
 # ==============================================================================
 
 def find_best_code_in_path(path_parts, esg_mapping: dict):
@@ -226,7 +210,7 @@ def choose_dimension_folder(path_parts, code_part, code_idx, code):
 
 
 # ==============================================================================
-# 主功能：生成资料索引 Excel（输出文件名带 YYYYMMDD）
+# 主功能：生成资料索引 Excel
 # ==============================================================================
 
 def resolve_output_path_with_date(output_path_or_dir: str) -> str:
@@ -310,29 +294,54 @@ def generate_geds_inventory_final(root_path, output_path_or_dir, esg_mapping: di
         print(f"无法保存。详细错误: {e}")
 
 
+def run_data_list(project_dir: str):
+    """
+    可编程调用入口：生成指定项目的资料索引 Excel。
+
+    Args:
+        project_dir: 企业项目目录（绝对路径或相对项目根的相对路径）
+    """
+    # 延迟导入，避免循环依赖
+    import sys
+    sys.path.insert(0, _HERE)
+    from config import get_paths
+
+    paths = get_paths(project_dir)
+    reference_excel = str(paths.checklist_xlsx)
+    target_folder = str(paths.materials_dir)
+    output_dir = str(paths.processed_dir)
+
+    print("[信息] Step 0: 从参考Excel构建'编码 -> 议题/指标'映射...")
+    mapping, stats = load_esg_mapping_from_reference_excel(
+        reference_excel_path=reference_excel,
+        search_rows=200,
+        clear_formats=True,
+    )
+
+    print("[信息] 映射构建完成：")
+    print(f"  - mapping_size         : {stats['mapping_size']}")
+    print(f"  - rows_scanned         : {stats['rows_scanned']}")
+    if stats["duplicate_codes_count"] > 0:
+        print(f"  - duplicate_codes_count: {stats['duplicate_codes_count']}")
+
+    print("\n[信息] Step 1: 开始扫描资料文件夹并生成索引...")
+    generate_geds_inventory_final(target_folder, output_dir, mapping)
+
+
 # ==============================================================================
 # 程序入口
 # ==============================================================================
 
 def main():
-    print("[信息] Step 0: 从参考Excel构建‘编码 -> 议题/指标’映射（只做确定性匹配）...")
-    mapping, stats = load_esg_mapping_from_reference_excel(
-        reference_excel_path=REFERENCE_EXCEL,
-        search_rows=REF_SEARCH_ROWS,
-        clear_formats=CLEAR_FORMATS
+    parser = argparse.ArgumentParser(
+        description="扫描企业资料文件夹，生成资料索引 Excel"
     )
-
-    print("[信息] 映射构建完成：")
-    print(f"  - sheets_total         : {stats['sheets_total']}")
-    print(f"  - rows_scanned         : {stats['rows_scanned']}")
-    print(f"  - rows_used            : {stats['rows_used']}")
-    print(f"  - mapping_size         : {stats['mapping_size']}")
-    print(f"  - duplicate_codes_count: {stats['duplicate_codes_count']}")
-    if stats["duplicate_codes_count"] > 0:
-        print(f"  - duplicates_sample    : {stats['duplicates_sample']}")
-
-    print("\n[信息] Step 1: 开始扫描资料文件夹并生成索引（路径全扫描：能识别到编码就写编码，映射无则匹配项为 null）...")
-    generate_geds_inventory_final(TARGET_FOLDER, OUTPUT_EXCEL_OR_DIR, mapping)
+    parser.add_argument(
+        "--project-dir", required=True,
+        help="企业项目目录，如 projects/示例企业_2025"
+    )
+    args = parser.parse_args()
+    run_data_list(args.project_dir)
 
 
 if __name__ == "__main__":

@@ -116,7 +116,7 @@ export function CreateProjectModal({ open, onClose, onCreated }: CreateProjectMo
               type="text"
               value={companyName}
               onChange={(e) => setCompanyName(e.target.value)}
-              placeholder="例如：艾森股份"
+              placeholder="例如：示例企业"
               style={{ ...inputStyle, opacity: loading ? 0.6 : 1 }}
               disabled={loading}
               autoFocus
