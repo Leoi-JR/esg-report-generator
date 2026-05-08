@@ -2,6 +2,13 @@
 projects/*/raw/
 projects/*/processed/
 
+# demo_2025 是公开演示项目，放行全部文件
+!projects/demo_2025/
+!projects/demo_2025/raw/
+!projects/demo_2025/raw/**
+!projects/demo_2025/processed/
+!projects/demo_2025/processed/.gitkeep
+
 # ── data/ 目录（开发测试数据，不提交；仅放行框架模板） ─────────────────────────
 data/
 !data/raw/ESG报告框架.xlsx
