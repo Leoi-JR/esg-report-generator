@@ -2,10 +2,10 @@
 generate_folder_structure.py
 ============================
 永久工具：读取【定性】ESG报告资料清单.xlsx，生成标准化空文件夹结构，
-并打包为 ZIP，供甲方按编码存放资料。
+并打包为 ZIP，供企业按编码存放资料。
 
 文件夹层级（三级）：
-    【艾森股份】ESG资料收集/
+    【公司名称】ESG资料收集/
     ├── A-总体概况/
     │   ├── A1 企业LOGO与VI规范/
     │   │   └── 📋说明.txt
@@ -24,10 +24,14 @@ generate_folder_structure.py
     └── 【补充资料-不确定分类】/
         └── 📋说明.txt
 
-运行方式：
-    python3 generate_folder_structure.py
+运行方式（推荐，明确传参）：
+    python3 generate_folder_structure.py \
+        --company-name "公司名称" \
+        --reference-excel "path/to/资料收集清单.xlsx" \
+        --output-dir "path/to/output"
 
-修改文件顶部配置变量后直接运行。
+运行方式（使用项目模板，需先将清单放到 templates/ 目录）：
+    python3 generate_folder_structure.py --company-name "公司名称"
 """
 
 import os
@@ -57,15 +61,14 @@ from esg_utils import (
 )
 
 # ==============================================================================
-# 用户配置：只改这里
+# 路径常量（不含企业特定信息）
 # ==============================================================================
 _HERE = os.path.dirname(os.path.abspath(__file__))  # src/ 目录
 _ROOT = os.path.dirname(_HERE)                       # 项目根目录
 
-COMPANY_NAME    = "艾森股份"
-REFERENCE_EXCEL = os.path.join(_ROOT, "data/raw/资料收集清单-to艾森/【艾森股份】1-【定性】ESG报告资料清单.xlsx")
-OUTPUT_DIR      = os.path.join(_ROOT, "data/processed")
-PACK_ZIP        = True   # True=打包ZIP并删除临时目录；False=仅生成目录不打包
+# 默认指向 templates/ 目录的通用模板清单
+_DEFAULT_REFERENCE_EXCEL = os.path.join(_ROOT, "templates", "资料收集清单.xlsx")
+_DEFAULT_OUTPUT_DIR      = os.path.join(_ROOT, "output")
 # ==============================================================================
 
 
@@ -446,57 +449,51 @@ def main():
     """
     CLI 入口：支持两种运行方式。
 
-    1. 无参数（向后兼容）：使用文件顶部的硬编码配置
-       python3 generate_folder_structure.py
-
-    2. 带参数（Web 调用）：所有参数通过 CLI 传入，stdout 输出 JSON
+    1. 带参数（推荐）：所有参数通过 CLI 传入，stdout 输出 JSON
        python3 generate_folder_structure.py \
-         --company-name "艾森股份" \
+         --company-name "公司名称" \
          --reference-excel "path/to/清单.xlsx" \
-         --output-dir "/tmp/output"
+         --output-dir "/path/to/output"
+
+    2. 仅传公司名（使用 templates/资料收集清单.xlsx）：
+       python3 generate_folder_structure.py --company-name "公司名称"
     """
     import argparse
     import json
 
-    # 检查是否有 CLI 参数（排除脚本名本身）
-    if len(sys.argv) > 1:
-        parser = argparse.ArgumentParser(
-            description="生成 ESG 标准文件夹结构 ZIP"
-        )
-        parser.add_argument(
-            "--company-name", required=True,
-            help="公司名称，如 艾森股份"
-        )
-        parser.add_argument(
-            "--reference-excel", required=True,
-            help="定性清单 Excel 路径"
-        )
-        parser.add_argument(
-            "--output-dir", required=True,
-            help="输出目录（ZIP 将写入此目录）"
-        )
-        args = parser.parse_args()
+    parser = argparse.ArgumentParser(
+        description="生成 ESG 标准文件夹结构 ZIP"
+    )
+    parser.add_argument(
+        "--company-name", required=True,
+        help="公司名称，如 示例企业"
+    )
+    parser.add_argument(
+        "--reference-excel",
+        default=_DEFAULT_REFERENCE_EXCEL,
+        help="定性清单 Excel 路径（默认：templates/资料收集清单.xlsx）"
+    )
+    parser.add_argument(
+        "--output-dir",
+        default=_DEFAULT_OUTPUT_DIR,
+        help="输出目录（ZIP 将写入此目录，默认：output/）"
+    )
+    args = parser.parse_args()
 
-        try:
-            zip_path = generate_folder_structure(
-                company_name=args.company_name,
-                reference_excel=args.reference_excel,
-                output_dir=args.output_dir,
-                pack_zip=True,
-            )
-            print(json.dumps({"success": True, "zip_path": str(zip_path)}))
-            sys.exit(0)
-        except Exception as e:
-            print(json.dumps({"success": False, "error": str(e)}), file=sys.stderr)
-            sys.exit(1)
-    else:
-        # 向后兼容：使用模块顶部配置
-        generate_folder_structure(
-            company_name=COMPANY_NAME,
-            reference_excel=REFERENCE_EXCEL,
-            output_dir=OUTPUT_DIR,
-            pack_zip=PACK_ZIP,
+    os.makedirs(args.output_dir, exist_ok=True)
+
+    try:
+        zip_path = generate_folder_structure(
+            company_name=args.company_name,
+            reference_excel=args.reference_excel,
+            output_dir=args.output_dir,
+            pack_zip=True,
         )
+        print(json.dumps({"success": True, "zip_path": str(zip_path)}))
+        sys.exit(0)
+    except Exception as e:
+        print(json.dumps({"success": False, "error": str(e)}), file=sys.stderr)
+        sys.exit(1)
 
 
 if __name__ == "__main__":
