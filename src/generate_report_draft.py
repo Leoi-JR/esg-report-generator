@@ -66,6 +66,9 @@ from config import (
     RRF_K,
     # Reranker 默认开关
     ENABLE_RERANK,
+    # 文件夹编码匹配加权
+    ENABLE_FOLDER_BOOST,
+    FOLDER_BOOST_SCORE,
     get_paths,
 )
 from bm25_retriever import build_bm25_index, bm25_search_batch
@@ -86,10 +89,15 @@ OUTPUT_DIR = os.path.join(_ROOT, "data/processed/report_draft")
 # ==============================================================================
 
 def load_framework_queries(framework_queries_path: str | None = None) -> list[dict]:
-    """加载 framework_retrieval_queries.json，返回 119 条叶节点记录。"""
+    """加载 framework_retrieval_queries.json，返回叶节点记录列表。"""
     path = framework_queries_path or FRAMEWORK_QUERIES_PATH
     with open(path, "r", encoding="utf-8") as f:
         queries = json.load(f)
+    if queries and "code" not in queries[0]:
+        raise RuntimeError(
+            "framework_retrieval_queries.json 缺少 code 字段，格式已过期。\n"
+            "请重新运行 Step 3：python3 src/generate_retrieval_queries.py --project-dir <项目目录>"
+        )
     print(f"  ✓ 加载报告框架叶节点：{len(queries)} 条")
     return queries
 
@@ -384,17 +392,21 @@ def rrf_fusion(
     ranks_hyde: dict[str, int],
     ranks_bm25: dict[str, int],
     k: int = RRF_K,
+    folder_boost_ids: set | None = None,
+    folder_boost: float = FOLDER_BOOST_SCORE,
 ) -> dict[str, float]:
     """
-    RRF (Reciprocal Rank Fusion) 三路融合。
+    RRF (Reciprocal Rank Fusion) 三路融合，支持文件夹编码匹配加权。
 
-    公式：score(d) = Σ 1/(k + rank_i(d))
+    公式：score(d) = Σ 1/(k + rank_i(d)) [+ folder_boost if folder_code 匹配]
 
     参数：
         ranks_rq: {chunk_id: rank} retrieval_query 路径排名
         ranks_hyde: {chunk_id: rank} hypothetical_doc 路径排名
         ranks_bm25: {chunk_id: rank} BM25 路径排名
         k: RRF 平滑参数（默认 60，值越大排名差异影响越小）
+        folder_boost_ids: folder_code 与当前框架节点 code 一致的 chunk_id 集合
+        folder_boost: 匹配时额外加分（默认 0.5，约等于一路排名第 1 的贡献）
 
     返回：
         {chunk_id: rrf_score} 融合后的分数
@@ -410,6 +422,8 @@ def rrf_fusion(
             score += 1.0 / (k + ranks_hyde[cid])
         if cid in ranks_bm25:
             score += 1.0 / (k + ranks_bm25[cid])
+        if folder_boost_ids and cid in folder_boost_ids:
+            score += folder_boost
         scores[cid] = score
 
     return scores
@@ -493,9 +507,18 @@ def select_topk_rrf(
                     bm25_ranks[cid] = rank
                     bm25_score_map[cid] = bm25_score
 
-        # 3. 计算融合分数
+        # 3. 计算融合分数（含文件夹编码匹配加权）
+        query_code = q.get("code", "")
+        folder_boost_ids = None
+        if ENABLE_FOLDER_BOOST and query_code:
+            folder_boost_ids = {
+                c["chunk_id"] for c in candidate_chunks
+                if c.get("folder_code") == query_code
+            }
+
         if use_bm25 and bm25_ranks:
-            fused_scores = rrf_fusion(rq_ranks, hyde_ranks, bm25_ranks)
+            fused_scores = rrf_fusion(rq_ranks, hyde_ranks, bm25_ranks,
+                                      folder_boost_ids=folder_boost_ids)
         else:
             # 退化为双路 Max 融合（使用原始相似度分数）
             fused_scores = {}
@@ -503,6 +526,11 @@ def select_topk_rrf(
                 cid = chunk["chunk_id"]
                 fused_scores[cid] = max(float(rq_scores_row[idx]),
                                         float(hyde_scores_row[idx]))
+            # 双路模式也应用 folder boost
+            if folder_boost_ids:
+                for cid in folder_boost_ids:
+                    if cid in fused_scores:
+                        fused_scores[cid] += FOLDER_BOOST_SCORE
 
         # 4. 按融合分数排序 + parent_id 去重
         sorted_cids = sorted(fused_scores.keys(), key=lambda c: -fused_scores[c])
@@ -573,6 +601,7 @@ def select_topk_rrf(
 
         results.append({
             "id": q["id"],
+            "code": q.get("code", ""),
             "full_path": q["full_path"],
             "leaf_title": q["leaf_title"],
             "gloss": q.get("gloss", ""),
@@ -706,6 +735,7 @@ def select_topk(
 
         results.append({
             "id": q["id"],
+            "code": q.get("code", ""),
             "full_path": q["full_path"],
             "leaf_title": q["leaf_title"],
             "gloss": q.get("gloss", ""),
@@ -1349,21 +1379,28 @@ def print_header():
     print()
 
 
-def run_report_draft(paths, rerank=True, use_bm25=None, tracker=None):
+def run_report_draft(paths, rerank=True, use_bm25=None, use_folder_boost=None, tracker=None):
     """
     三路混合检索核心入口，可被 import 调用（Web 端、测试等）。
 
     参数：
-        paths    - ProjectPaths（由 config.get_paths() 返回）
-        rerank   - 是否启用 Reranker 精排（默认 True）
-        use_bm25 - 是否启用 BM25 第三路（None 时使用 config.ENABLE_BM25）
-        tracker  - ProgressTracker 实例；None 时使用 NullTracker
+        paths           - ProjectPaths（由 config.get_paths() 返回）
+        rerank          - 是否启用 Reranker 精排（默认 True）
+        use_bm25        - 是否启用 BM25 第三路（None 时使用 config.ENABLE_BM25）
+        use_folder_boost - 是否启用 folder_code 结构匹配加权（None 时使用 config.ENABLE_FOLDER_BOOST）
+                          设为 False 可切换为纯语义 RAG 模式（适用于甲方未整理文件夹的场景）
+        tracker         - ProgressTracker 实例；None 时使用 NullTracker
     """
     from progress_tracker import NullTracker
     if tracker is None:
         tracker = NullTracker()
     if use_bm25 is None:
         use_bm25 = ENABLE_BM25
+    if use_folder_boost is not None:
+        # 运行时覆盖 config 中的全局开关
+        import config as _cfg
+        _cfg.ENABLE_FOLDER_BOOST = use_folder_boost
+        globals()["ENABLE_FOLDER_BOOST"] = use_folder_boost
 
     paths.draft_output_dir.mkdir(parents=True, exist_ok=True)
 

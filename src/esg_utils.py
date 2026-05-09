@@ -238,6 +238,22 @@ def find_header_row_for_reference(df_raw, search_rows=200):
     return None
 
 
+def find_header_row_for_framework(df_raw, search_rows=50):
+    """
+    定位报告框架文件的表头行。
+    查找同时含「释义」（或「gloss」）且含「编码」（或「code」）的行。
+    返回表头行索引（0-based），或 None。
+    """
+    max_scan = min(search_rows, df_raw.shape[0])
+    for r in range(max_scan):
+        row_vals = [clean_text(v) for v in df_raw.iloc[r].tolist()]
+        has_gloss = any("释义" in v or "gloss" in v.lower() for v in row_vals if v)
+        has_code  = any("编码" in v or "code" in v.lower() for v in row_vals if v)
+        if has_gloss and has_code:
+            return r
+    return None
+
+
 def find_col_idx_by_keywords(df_raw, header_idx, keywords):
     """
     在表头行按关键字匹配列索引。

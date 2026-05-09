@@ -1308,6 +1308,40 @@ _EXTRACTOR_MAP = {
 }
 
 
+def validate_project_files(paths) -> list[str]:
+    """
+    校验框架文件与清单文件的编码一致性，返回 warning 列表。
+    不抛出异常，允许流水线继续运行（仅提示，由用户判断是否修正）。
+    """
+    from generate_retrieval_queries import parse_excel
+    from data_list_v2 import load_esg_mapping_from_reference_excel
+
+    try:
+        framework_records = parse_excel(paths.framework_xlsx)
+        framework_codes = {r["code"] for r in framework_records if r.get("code")}
+    except Exception as e:
+        return [f"[校验] 无法读取框架文件：{e}"]
+
+    try:
+        checklist_mapping, _ = load_esg_mapping_from_reference_excel(str(paths.checklist_xlsx))
+        checklist_codes = set(checklist_mapping.keys())
+    except Exception as e:
+        return [f"[校验] 无法读取清单文件：{e}"]
+
+    warnings = []
+    only_framework = framework_codes - checklist_codes
+    only_checklist = checklist_codes - framework_codes
+    if only_framework:
+        warnings.append(
+            f"[校验] 框架有但清单无的编码（Step 4 无法利用文件夹结构）：{sorted(only_framework)}"
+        )
+    if only_checklist:
+        warnings.append(
+            f"[校验] 清单有但框架无的编码（这些指标不会生成报告章节）：{sorted(only_checklist)}"
+        )
+    return warnings
+
+
 def run_align_pipeline(paths, rebuild=None, tracker=None):
     """
     对齐流水线核心入口，可被 import 调用（Web 端、测试等）。
@@ -1333,6 +1367,11 @@ def run_align_pipeline(paths, rebuild=None, tracker=None):
 
     print_header(company_name)
     print_config_summary(paths, company_name, rebuild=rebuild)
+
+    # 校验框架与清单编码一致性
+    validation_warnings = validate_project_files(paths)
+    for w in validation_warnings:
+        print(f"  ⚠ {w}")
 
     if rebuild:
         _cleanup_caches(paths, rebuild)

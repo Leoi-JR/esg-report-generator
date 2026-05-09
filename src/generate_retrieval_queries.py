@@ -43,9 +43,16 @@ import threading
 from dotenv import load_dotenv
 load_dotenv()  # 加载仓库根 .env 文件
 
-import openpyxl
+import pandas as pd
 from openai import OpenAI
 from progress_tracker import get_tracker
+from esg_utils import (
+    find_header_row_for_framework,
+    find_col_idx_by_keywords,
+    forward_fill_in_raw,
+    clean_text,
+    is_blank,
+)
 
 # ── 路径配置 ──────────────────────────────────────────────────────────────────
 _HERE = Path(__file__).resolve().parent
@@ -85,57 +92,67 @@ EXCLUDE_L1 = {
 
 
 # =============================================================================
-# 阶段 1：解析 Excel，展开合并单元格
+# 阶段 1：解析 Excel
 # =============================================================================
 
 def parse_excel(path: Path) -> list[dict]:
     """
-    读取 Excel，展开合并单元格，返回所有数据行（从第 4 行开始）的扁平记录列表。
-    每条记录：{row, l1, l2, l3, l4, gloss}
+    读取报告框架 Excel，返回所有数据行的扁平记录列表。
+    每条记录：{row, l1, l2, l3, l4, code, gloss}
+
+    格式要求：
+    - 任意行数的标题/空行
+    - 列名行：含「释义」和「编码」关键词（由 find_header_row_for_framework 定位）
+    - 数据行：l1/l2/l3 允许留空（forward_fill 向下填充），l4 和 code 每行独立
     """
-    wb = openpyxl.load_workbook(path)
-    ws = wb.active
+    df_raw = pd.read_excel(path, header=None, dtype=object)
 
-    # 构建合并区域的值映射：(row, col) → 左上角的值
-    merge_map: dict[tuple[int, int], str | None] = {}
-    for mr in ws.merged_cells.ranges:
-        # 左上角的值
-        top_val = ws.cell(row=mr.min_row, column=mr.min_col).value
-        for r in range(mr.min_row, mr.max_row + 1):
-            for c in range(mr.min_col, mr.max_col + 1):
-                merge_map[(r, c)] = top_val
+    header_idx = find_header_row_for_framework(df_raw)
+    if header_idx is None:
+        raise ValueError(
+            f"无法定位报告框架文件的表头行：{path}\n"
+            "请确认列名行中包含「释义」和「编码」两个关键词。"
+        )
 
-    def cell_val(row: int, col: int) -> str:
-        """读取单元格值（考虑合并区域），返回 strip 后的字符串，None 返回空串。"""
-        if (row, col) in merge_map:
-            v = merge_map[(row, col)]
-        else:
-            v = ws.cell(row=row, column=col).value
-        if v is None:
+    col_l1    = find_col_idx_by_keywords(df_raw, header_idx, ["一级维度", "维度"])
+    col_l2    = find_col_idx_by_keywords(df_raw, header_idx, ["二级议题", "议题"])
+    col_l3    = find_col_idx_by_keywords(df_raw, header_idx, ["三级指标"])
+    col_l4    = find_col_idx_by_keywords(df_raw, header_idx, ["四级指标"])
+    col_code  = find_col_idx_by_keywords(df_raw, header_idx, ["编码", "code"])
+    col_gloss = find_col_idx_by_keywords(df_raw, header_idx, ["释义", "gloss"])
+
+    # l1/l2/l3 允许合并单元格或平铺留空，forward_fill 向下补全
+    fill_cols = [c for c in [col_l1, col_l2, col_l3] if c is not None]
+    df_filled = forward_fill_in_raw(df_raw, start_row=header_idx + 1, col_indices=fill_cols)
+
+    def get_val(row, col):
+        if col is None or col >= len(row):
             return ""
-        return str(v).strip()
+        v = row.iloc[col]
+        return "" if is_blank(v) else str(v).strip()
 
     records = []
-    # 第 3 行是表头，数据从第 4 行开始
-    for r in range(4, ws.max_row + 1):
-        l1 = cell_val(r, 1)   # A列：一级标题
-        l2 = cell_val(r, 2)   # B列：二级议题
-        l3 = cell_val(r, 3)   # C列：三级指标
-        l4 = cell_val(r, 4)   # D列：末级指标
-        gloss = cell_val(r, 5)  # E列：释义
-        # 跳过完全空行
-        if not any([l1, l2, l3, l4, gloss]):
+    data_part = df_filled.iloc[header_idx + 1:]
+    for row_excel_idx, (_, row) in enumerate(data_part.iterrows(), start=header_idx + 2):
+        l1    = get_val(row, col_l1)
+        l2    = get_val(row, col_l2)
+        l3    = get_val(row, col_l3)
+        l4    = get_val(row, col_l4)
+        code  = get_val(row, col_code)
+        gloss = get_val(row, col_gloss)
+        if not any([l1, l2, l3, l4, code, gloss]):
             continue
         records.append({
-            "row": r,
-            "l1": l1,
-            "l2": l2,
-            "l3": l3,
-            "l4": l4,
+            "row":   row_excel_idx,
+            "l1":    l1,
+            "l2":    l2,
+            "l3":    l3,
+            "l4":    l4,
+            "code":  code,
             "gloss": gloss,
         })
 
-    print(f"[阶段1] 解析完成，共 {len(records)} 条记录（第4-{ws.max_row}行）")
+    print(f"[阶段1] 解析完成，共 {len(records)} 条记录")
     return records
 
 
@@ -193,6 +210,7 @@ def identify_leaves(records: list[dict]) -> list[dict]:
             "l2": rec["l2"],
             "l3": rec["l3"],
             "l4": rec["l4"],
+            "code": rec.get("code", ""),
             "gloss": rec["gloss"],
         })
 
@@ -676,7 +694,8 @@ def run_retrieval_queries(paths, model=None, resume=False, tracker=None):
         entry = {
             "id": n["id"], "row": n["row"], "full_path": n["full_path"],
             "leaf_title": n["leaf_title"], "l1": n["l1"], "l2": n["l2"],
-            "l3": n["l3"], "l4": n["l4"], "gloss": n["gloss"],
+            "l3": n["l3"], "l4": n["l4"], "code": n.get("code", ""),
+            "gloss": n["gloss"],
             "retrieval_query": progress["retrieval_query"].get(n["id"]),
             "hypothetical_doc": progress["hypothetical_doc"].get(n["id"]),
         }
@@ -908,6 +927,7 @@ def main():
             "l2": n["l2"],
             "l3": n["l3"],
             "l4": n["l4"],
+            "code": n.get("code", ""),
             "gloss": n["gloss"],
         }
 

@@ -277,12 +277,8 @@ def make_readme_content(code, topic, indicator, requirement, department, remark)
 # ==============================================================================
 
 def build_topic_display(info: dict) -> str:
-    """
-    从议题字段提取干净的显示名（去除括号注释如 (GA)、\n等）
-    """
+    """从议题字段提取干净的显示名（去除换行）"""
     topic = info.get("topic", "")
-    # 去掉括号内的编码注释，如"可持续发展治理机制\n（GA）"→"可持续发展治理机制"
-    topic = re.sub(r"[（(][A-Z]{1,4}[)）]", "", topic).strip()
     topic = topic.replace("\n", " ").strip()
     return topic if topic else ""
 
