@@ -394,6 +394,7 @@ def rrf_fusion(
     k: int = RRF_K,
     folder_boost_ids: set | None = None,
     folder_boost: float = FOLDER_BOOST_SCORE,
+    folder_penalize_ids: set | None = None,
 ) -> dict[str, float]:
     """
     RRF (Reciprocal Rank Fusion) 三路融合，支持文件夹编码匹配加权。
@@ -405,8 +406,9 @@ def rrf_fusion(
         ranks_hyde: {chunk_id: rank} hypothetical_doc 路径排名
         ranks_bm25: {chunk_id: rank} BM25 路径排名
         k: RRF 平滑参数（默认 60，值越大排名差异影响越小）
-        folder_boost_ids: folder_code 与当前框架节点 code 一致的 chunk_id 集合
+        folder_boost_ids: folder_code 匹配且 alignment_status 非 misplaced 的 chunk_id 集合
         folder_boost: 匹配时额外加分（默认 0.5，约等于一路排名第 1 的贡献）
+        folder_penalize_ids: alignment_status==misplaced 的 chunk_id 集合，反向降权
 
     返回：
         {chunk_id: rrf_score} 融合后的分数
@@ -424,6 +426,8 @@ def rrf_fusion(
             score += 1.0 / (k + ranks_bm25[cid])
         if folder_boost_ids and cid in folder_boost_ids:
             score += folder_boost
+        if folder_penalize_ids and cid in folder_penalize_ids:
+            score -= folder_boost * 0.5  # 疑似错位：反向降权
         scores[cid] = score
 
     return scores
@@ -510,15 +514,23 @@ def select_topk_rrf(
         # 3. 计算融合分数（含文件夹编码匹配加权）
         query_code = q.get("code", "")
         folder_boost_ids = None
+        folder_penalize_ids = None
         if ENABLE_FOLDER_BOOST and query_code:
             folder_boost_ids = {
                 c["chunk_id"] for c in candidate_chunks
                 if c.get("folder_code") == query_code
+                and c.get("alignment_status", "consistent") != "misplaced"
+            }
+            folder_penalize_ids = {
+                c["chunk_id"] for c in candidate_chunks
+                if c.get("folder_code") == query_code
+                and c.get("alignment_status") == "misplaced"
             }
 
         if use_bm25 and bm25_ranks:
             fused_scores = rrf_fusion(rq_ranks, hyde_ranks, bm25_ranks,
-                                      folder_boost_ids=folder_boost_ids)
+                                      folder_boost_ids=folder_boost_ids,
+                                      folder_penalize_ids=folder_penalize_ids)
         else:
             # 退化为双路 Max 融合（使用原始相似度分数）
             fused_scores = {}
@@ -526,11 +538,15 @@ def select_topk_rrf(
                 cid = chunk["chunk_id"]
                 fused_scores[cid] = max(float(rq_scores_row[idx]),
                                         float(hyde_scores_row[idx]))
-            # 双路模式也应用 folder boost
+            # 双路模式也应用 folder boost / penalize
             if folder_boost_ids:
                 for cid in folder_boost_ids:
                     if cid in fused_scores:
                         fused_scores[cid] += FOLDER_BOOST_SCORE
+            if folder_penalize_ids:
+                for cid in folder_penalize_ids:
+                    if cid in fused_scores:
+                        fused_scores[cid] -= FOLDER_BOOST_SCORE * 0.5
 
         # 4. 按融合分数排序 + parent_id 去重
         sorted_cids = sorted(fused_scores.keys(), key=lambda c: -fused_scores[c])

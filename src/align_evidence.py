@@ -83,7 +83,9 @@ from config import (
     CONSISTENCY_TOPN,
     EXTRA_RELEVANCE_THRESHOLD,
     MIN_RELEVANCE_SCORE,
-    ENABLE_TABLE_SUMMARY,  # Phase 2：表格摘要开关
+    ENABLE_TABLE_SUMMARY,
+    ENABLE_BM25_ALIGN,
+    RRF_K,
     VLM_MODEL,
     get_paths,
 )
@@ -947,6 +949,105 @@ def align_chunks(
     return alignment_records
 
 
+def align_chunks_rrf(
+    chunk_records_with_emb: list,
+    indicator_collection,
+    indicator_queries: dict,
+    top_k: int = EMBEDDING_TOP_K,
+    topn: int = CONSISTENCY_TOPN,
+    extra_threshold: float = EXTRA_RELEVANCE_THRESHOLD,
+    min_relevance: float = MIN_RELEVANCE_SCORE,
+    rrf_k: int = RRF_K,
+) -> list:
+    """embedding + BM25 双路 RRF 对齐，替代 align_chunks()。
+
+    BM25 侧的维度转置逻辑：
+      1. 对全部 chunks 构建 BM25 索引
+      2. 用每个指标的查询文本查 BM25，得到"该指标下 ranked chunks"列表
+      3. 转置为 chunk_id → {code: bm25_rank}
+      4. 对每个 chunk，与 embedding 排名 RRF 融合，得到 [(code, rrf_score), ...]
+      5. 直接替换 semantic_topk，classify_consistency() 无需改动
+    """
+    from bm25_retriever import build_bm25_index, bm25_search_batch
+
+    # ── 路1：embedding 检索 ──
+    all_emb_topk = semantic_search_batch(
+        chunk_records_with_emb, indicator_collection, top_k=top_k
+    )
+
+    # ── 路2：BM25 检索 ──
+    build_bm25_index(chunk_records_with_emb)   # 写入全局缓存
+
+    codes   = list(indicator_queries.keys())
+    queries = [indicator_queries[c] for c in codes]
+    bm25_per_indicator = bm25_search_batch(queries, top_n=top_k * 2)
+
+    # 转置：chunk_id → {code: bm25_rank}
+    bm25_rank_map: dict[str, dict[str, int]] = {}
+    for j, code in enumerate(codes):
+        for rank, (cid, _score) in enumerate(bm25_per_indicator[j], 1):
+            bm25_rank_map.setdefault(cid, {})[code] = rank
+
+    # ── RRF 融合 + classify_consistency ──
+    alignment_records = []
+    for i, rec in enumerate(chunk_records_with_emb):
+        cid = rec["chunk_id"]
+
+        emb_ranks        = {code: rank + 1 for rank, (code, _) in enumerate(all_emb_topk[i])}
+        bm25_ranks_chunk = bm25_rank_map.get(cid, {})
+
+        # 如果 embedding Top-1 分数本身低于阈值（乱码/空文本），保持低相关判定
+        emb_top1_score = all_emb_topk[i][0][1] if all_emb_topk[i] else 0.0
+        if emb_top1_score < min_relevance:
+            fused_topk = all_emb_topk[i][:top_k]
+            status, desc, suggested = classify_consistency(
+                folder_code=rec.get("folder_code"),
+                semantic_topk=fused_topk,
+                topn=topn,
+                extra_threshold=extra_threshold,
+                min_relevance=min_relevance,  # cosine 阈值保护
+            )
+            new_rec = dict(rec)
+            new_rec["semantic_topk"]    = fused_topk
+            new_rec["emb_topk"]         = fused_topk  # 单路回退，emb_topk 与 semantic_topk 相同
+            new_rec["consistency"]      = status
+            new_rec["consistency_desc"] = desc
+            new_rec["suggested_code"]   = suggested
+            alignment_records.append(new_rec)
+            continue
+
+        all_codes_seen = set(emb_ranks) | set(bm25_ranks_chunk)
+        rrf_scores: dict[str, float] = {}
+        for code in all_codes_seen:
+            s = 0.0
+            if code in emb_ranks:
+                s += 1.0 / (rrf_k + emb_ranks[code])
+            if code in bm25_ranks_chunk:
+                s += 1.0 / (rrf_k + bm25_ranks_chunk[code])
+            rrf_scores[code] = s
+
+        fused_topk = sorted(rrf_scores.items(), key=lambda x: -x[1])[:top_k]
+
+        status, desc, suggested = classify_consistency(
+            folder_code=rec.get("folder_code"),
+            semantic_topk=fused_topk,
+            topn=topn,
+            extra_threshold=extra_threshold,
+            min_relevance=0.01,  # RRF 量纲阈值（cosine 用 0.40，RRF 最大值约 0.033）
+        )
+
+        new_rec = dict(rec)
+        new_rec["semantic_topk"]    = fused_topk
+        new_rec["emb_topk"]         = all_emb_topk[i][:top_k]  # 原始余弦分数，供 Excel 展示和 Step 4 过滤
+        new_rec["consistency"]      = status
+        new_rec["consistency_desc"] = desc
+        new_rec["suggested_code"]   = suggested
+        alignment_records.append(new_rec)
+
+    print_phase4_summary(alignment_records)
+    return alignment_records
+
+
 # ==============================================================================
 # 阶段四 — 辅助函数：统计摘要打印
 # ==============================================================================
@@ -1059,8 +1160,8 @@ def write_alignment_excel(
             folder_topic = ""
             folder_indicator = ""
 
-        # 格式化 semantic_topk
-        topk = rec.get("semantic_topk", []) or []
+        # 格式化 semantic_topk（Excel 展示用原始余弦分数，便于 Step 4 阈值过滤）
+        topk = rec.get("emb_topk") or rec.get("semantic_topk", []) or []
         semantic_top5 = ", ".join(
             f"{code}:{score:.2f}" for code, score in topk
         ) if topk else ""
@@ -1609,16 +1710,45 @@ def run_align_pipeline(paths, rebuild=None, tracker=None):
     print("[阶段四] 语义检索与一致性判断...")
     tracker.set_stage("Semantic search")
 
-    alignment_records = align_chunks(
-        chunk_records_with_emb,
-        indicator_collection,
-        top_k=EMBEDDING_TOP_K,
-        topn=CONSISTENCY_TOPN,
-        extra_threshold=EXTRA_RELEVANCE_THRESHOLD,
-        min_relevance=MIN_RELEVANCE_SCORE,
-    )
+    if ENABLE_BM25_ALIGN:
+        alignment_records = align_chunks_rrf(
+            chunk_records_with_emb,
+            indicator_collection,
+            indicator_queries=indicator_queries,
+            top_k=EMBEDDING_TOP_K,
+            topn=CONSISTENCY_TOPN,
+            extra_threshold=EXTRA_RELEVANCE_THRESHOLD,
+            min_relevance=MIN_RELEVANCE_SCORE,
+        )
+    else:
+        alignment_records = align_chunks(
+            chunk_records_with_emb,
+            indicator_collection,
+            top_k=EMBEDDING_TOP_K,
+            topn=CONSISTENCY_TOPN,
+            extra_threshold=EXTRA_RELEVANCE_THRESHOLD,
+            min_relevance=MIN_RELEVANCE_SCORE,
+        )
 
     print(f"  ✓ 完成 {len(alignment_records)} 个文本块的对齐判断")
+
+    # 将 alignment_status 写回 chunks_cache，供 Step 4 消费
+    _EMOJI_TO_STATUS = {
+        "✅": "consistent",
+        "➕": "consistent",
+        "⚠️": "misplaced",
+        "🔍": "no_folder",
+        "➖": "low_relevance",
+        "❓": "low_relevance",
+    }
+    _status_map = {
+        rec["chunk_id"]: _EMOJI_TO_STATUS.get(rec["consistency"], "low_relevance")
+        for rec in alignment_records
+    }
+    for chunk in chunk_records:
+        chunk["alignment_status"] = _status_map.get(chunk["chunk_id"], "low_relevance")
+    save_chunks_cache({"parents": all_parents, "chunks": chunk_records}, str(paths.chunk_cache))
+    print("  ✓ alignment_status 已写入 chunks_cache")
 
     # ── 阶段五：输出对齐表 ──────────────────────────────────────────────
     timer.start("阶段五：输出对齐表")
