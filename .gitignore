@@ -2,6 +2,9 @@
 projects/*/raw/
 projects/*/processed/
 
+# 真实客户项目目录（含敏感数据，完整忽略）
+projects/真实甲方_2025/
+
 # demo_2025 是公开演示项目，放行全部文件
 !projects/demo_2025/
 !projects/demo_2025/raw/
@@ -52,6 +55,10 @@ web/tsconfig.tsbuildinfo
 .env
 .env.local
 .env.production
+
+# ── docs 内部文档（开发笔记/设计文档，不开源；仅保留 showcase 静态页） ─────────
+docs/*.md
+docs/web平台技术文档/
 
 # ── Claude Code ───────────────────────────────────────────────────────────────
 .claude/

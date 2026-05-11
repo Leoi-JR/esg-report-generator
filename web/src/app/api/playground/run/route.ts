@@ -106,7 +106,7 @@ export async function POST(req: NextRequest) {
 
   if (!fs.existsSync(paths.retrievalResults)) {
     return NextResponse.json(
-      { error: '检索结果不存在，请先运行 Step 3（检索）' },
+      { error: '检索结果不存在，请先运行混合检索精排' },
       { status: 400 }
     );
   }

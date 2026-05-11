@@ -25,7 +25,7 @@ export default function PipelineControls({ project }: { project?: string }) {
       const next = new Set(prev);
       if (next.has(name)) next.delete(name);
       else next.add(name);
-      // 若不再是"单独勾选 Step 2"，重置 retryFailed
+      // 若不再是"单独勾选检索查询生成"，重置 retryFailed
       const onlyRQ = next.size === 1 && next.has('generate_retrieval_queries');
       if (!onlyRQ) setRetryFailed(false);
       return next;
@@ -134,7 +134,7 @@ export default function PipelineControls({ project }: { project?: string }) {
                 </span>
               </label>
 
-              {/* 仅补跑失败节点（仅当只选中了 Step 2 时显示） */}
+              {/* 仅补跑失败节点（仅当只选中了「检索查询生成」时显示） */}
               {step.name === 'generate_retrieval_queries' && selectedSteps.has('generate_retrieval_queries') && selectedSteps.size === 1 && (
                 <div style={{ marginLeft: '32px', marginTop: '5px' }}>
                   <label style={{

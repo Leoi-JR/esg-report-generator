@@ -98,7 +98,7 @@ export default function RetrievalDiffBanner({ diff, project, editedChapterIds = 
           <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '3px' }}>
             <RefreshCw size={13} style={{ color: 'var(--blue)', flexShrink: 0 }} />
             <span style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text-1)' }}>
-              Step 3 检索结果已更新
+              混合检索结果已更新
             </span>
           </div>
           <p style={{ fontSize: '11px', color: 'var(--text-3)', margin: 0, lineHeight: 1.6 }}>

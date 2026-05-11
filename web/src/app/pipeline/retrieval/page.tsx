@@ -72,7 +72,7 @@ function RetrievalPageInner() {
   if (items.length === 0) {
     return (
       <div style={{ maxWidth: '1280px', margin: '0 auto', padding: '48px 24px', textAlign: 'center', color: 'var(--text-4)', fontSize: '12px', fontFamily: 'var(--font-body)' }}>
-        暂无检索结果数据。请先运行 Pipeline Step 4。
+        暂无检索结果数据。请先运行混合检索精排。
       </div>
     );
   }

@@ -81,7 +81,7 @@ export async function GET(req: NextRequest) {
 
   if (!fs.existsSync(currentPath)) {
     return NextResponse.json(
-      { error: '检索结果文件不存在，请先运行 Step 3' },
+      { error: '检索结果文件不存在，请先运行混合检索精排' },
       { status: 404 }
     );
   }

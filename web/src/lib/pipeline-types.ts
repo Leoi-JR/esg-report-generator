@@ -6,7 +6,7 @@
 export const PIPELINE_STEPS = [
   {
     name: 'align_evidence' as const,
-    label: 'Step 1: 资料分析',
+    label: '资料对齐质检',
     script: 'align_evidence.py',
     description: '提取并分析上传的资料文档',
     stages: [
@@ -23,7 +23,7 @@ export const PIPELINE_STEPS = [
   },
   {
     name: 'generate_retrieval_queries' as const,
-    label: 'Step 2: 查询生成',
+    label: '检索查询生成',
     script: 'generate_retrieval_queries.py',
     description: '为报告框架生成检索查询',
     stages: ['Parse Excel', 'Identify leaves', 'Base queries', 'HyDE docs', 'Validate'],
@@ -32,7 +32,7 @@ export const PIPELINE_STEPS = [
   },
   {
     name: 'retrieve_evidence' as const,
-    label: 'Step 3: 检索',
+    label: '混合检索精排',
     script: 'retrieve_evidence.py',
     description: '从资料中检索与章节相关的内容',
     stages: ['Dual embedding', 'BM25 scoring', 'RRF fusion', 'Reranker'],
@@ -41,7 +41,7 @@ export const PIPELINE_STEPS = [
   },
   {
     name: 'draft_report' as const,
-    label: 'Step 4: 初稿生成',
+    label: '报告初稿撰写',
     script: 'draft_report.py',
     description: 'AI 生成各章节初稿',
     stages: ['Load data', 'Quality filter', 'Generate drafts', 'Save results'],

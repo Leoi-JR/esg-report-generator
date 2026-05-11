@@ -2413,6 +2413,9 @@ _DOC_TMP_DIR = os.path.join(os.path.dirname(__file__), '..', 'data', 'processed'
 # 懒加载警告：避免重复打印 LibreOffice 缺失提示
 _soffice_warned = False
 
+# soffice 不支持多实例并发，用 Semaphore 限制同时只跑 1 个转换进程
+_soffice_semaphore = threading.Semaphore(1)
+
 
 def _soffice_available() -> bool:
     """检查 soffice（LibreOffice）是否在 PATH 中可用。"""
@@ -2437,31 +2440,32 @@ def convert_doc_to_docx(doc_path: str) -> str | None:
     import subprocess
     os.makedirs(_DOC_TMP_DIR, exist_ok=True)
 
-    try:
-        result = subprocess.run(
-            ["soffice", "--headless", "--convert-to", "docx",
-             "--outdir", _DOC_TMP_DIR, doc_path],
-            capture_output=True, text=True, timeout=SOFFICE_DOC_TIMEOUT,
-        )
-        if result.returncode != 0:
-            print(f"  [警告] soffice 转换失败（returncode={result.returncode}）："
-                  f"{os.path.basename(doc_path)}")
+    with _soffice_semaphore:
+        try:
+            result = subprocess.run(
+                ["soffice", "--headless", "--convert-to", "docx",
+                 "--outdir", _DOC_TMP_DIR, doc_path],
+                capture_output=True, text=True, timeout=SOFFICE_DOC_TIMEOUT,
+            )
+            if result.returncode != 0:
+                print(f"  [警告] soffice 转换失败（returncode={result.returncode}）："
+                      f"{os.path.basename(doc_path)}")
+                return None
+
+            # 输出文件名 = 原文件名 stem + .docx
+            stem    = os.path.splitext(os.path.basename(doc_path))[0]
+            out_path = os.path.join(_DOC_TMP_DIR, stem + ".docx")
+            if os.path.exists(out_path):
+                return out_path
+
+            print(f"  [警告] soffice 转换后未找到输出文件：{out_path}")
             return None
-
-        # 输出文件名 = 原文件名 stem + .docx
-        stem    = os.path.splitext(os.path.basename(doc_path))[0]
-        out_path = os.path.join(_DOC_TMP_DIR, stem + ".docx")
-        if os.path.exists(out_path):
-            return out_path
-
-        print(f"  [警告] soffice 转换后未找到输出文件：{out_path}")
-        return None
-    except subprocess.TimeoutExpired:
-        print(f"  [警告] soffice 转换超时：{os.path.basename(doc_path)}")
-        return None
-    except Exception as e:
-        print(f"  [警告] soffice 转换异常：{os.path.basename(doc_path)} — {e}")
-        return None
+        except subprocess.TimeoutExpired:
+            print(f"  [警告] soffice 转换超时：{os.path.basename(doc_path)}")
+            return None
+        except Exception as e:
+            print(f"  [警告] soffice 转换异常：{os.path.basename(doc_path)} — {e}")
+            return None
 
 
 def _extract_doc_sections(file_record: dict) -> List[dict]:

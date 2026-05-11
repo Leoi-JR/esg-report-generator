@@ -437,7 +437,7 @@ export default function StepTimeline({ stepRuns, progress, project }: Props) {
             {/* 说明文字 */}
             <p style={{ fontSize: '12px', color: 'var(--text-2)', lineHeight: 1.75, fontFamily: 'var(--font-body)', margin: '0 0 12px' }}>
               以下节点的查询生成多次尝试后仍未完成，跳过后这些章节<strong>不会出现在初稿中</strong>。
-              初稿完成后，可在控制面板中单独勾选「Step 2: 查询生成」并开启「仅补跑失败节点」选项重新生成。
+              初稿完成后，可在控制面板中单独勾选「检索查询生成」并开启「仅补跑失败节点」选项重新生成。
             </p>
 
             {/* 失败节点 ID */}

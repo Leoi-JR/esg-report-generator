@@ -14,7 +14,7 @@ const SRC_DIR = path.join(PROJECT_ROOT, 'src');
  * 对单个章节调用 draft_report.py --chapter-ids <id>，
  * 完成后返回该章节的最新内容。
  *
- * 前提：retrieval_results.json 必须已存在（Step 3 已完成）。
+ * 前提：retrieval_results.json 必须已存在（混合检索精排已完成）。
  */
 export async function POST(
   req: NextRequest,
@@ -36,10 +36,10 @@ export async function POST(
     return NextResponse.json({ error: msg }, { status: 400 });
   }
 
-  // 验证检索结果已存在（Step 3 必须已完成）
+  // 验证检索结果已存在（混合检索精排必须已完成）
   if (!fs.existsSync(paths.retrievalResults)) {
     return NextResponse.json(
-      { error: '检索结果不存在，请先运行 Step 3（检索）' },
+      { error: '检索结果不存在，请先运行混合检索精排' },
       { status: 400 }
     );
   }

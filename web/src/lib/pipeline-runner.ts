@@ -142,7 +142,7 @@ async function executeStepsSequentially(
         completedAt: new Date().toISOString(),
       });
 
-      // Step 3（检索）完成后保存快照，供后续差异对比
+      // 混合检索精排完成后保存快照，供后续差异对比
       if (stepName === 'retrieve_evidence') {
         saveRetrievalSnapshot(projectDir);
       }
@@ -445,7 +445,7 @@ export function cancelPipelineRun(runId: string): boolean {
 }
 
 /**
- * 保存检索结果快照，供 Step 3 重跑后做差异对比。
+ * 保存检索结果快照，供混合检索精排重跑后做差异对比。
  * 把当前 retrieval_results.json 复制为 retrieval_results_prev.json。
  */
 function saveRetrievalSnapshot(projectDir: string): void {
