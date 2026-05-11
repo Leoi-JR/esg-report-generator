@@ -1038,7 +1038,7 @@ def align_chunks_rrf(
 
         new_rec = dict(rec)
         new_rec["semantic_topk"]    = fused_topk
-        new_rec["emb_topk"]         = all_emb_topk[i][:top_k]  # 原始余弦分数，供 Excel 展示和 Step 4 过滤
+        new_rec["emb_topk"]         = all_emb_topk[i][:top_k]  # 原始余弦分数，供 Excel 展示和 混合检索精排 过滤
         new_rec["consistency"]      = status
         new_rec["consistency_desc"] = desc
         new_rec["suggested_code"]   = suggested
@@ -1160,7 +1160,7 @@ def write_alignment_excel(
             folder_topic = ""
             folder_indicator = ""
 
-        # 格式化 semantic_topk（Excel 展示用原始余弦分数，便于 Step 4 阈值过滤）
+        # 格式化 semantic_topk（Excel 展示用原始余弦分数，便于 混合检索精排 阈值过滤）
         topk = rec.get("emb_topk") or rec.get("semantic_topk", []) or []
         semantic_top5 = ", ".join(
             f"{code}:{score:.2f}" for code, score in topk
@@ -1434,7 +1434,7 @@ def validate_project_files(paths) -> list[str]:
     only_checklist = checklist_codes - framework_codes
     if only_framework:
         warnings.append(
-            f"[校验] 框架有但清单无的编码（Step 4 无法利用文件夹结构）：{sorted(only_framework)}"
+            f"[校验] 框架有但清单无的编码（混合检索精排 无法利用文件夹结构）：{sorted(only_framework)}"
         )
     if only_checklist:
         warnings.append(
@@ -1732,7 +1732,7 @@ def run_align_pipeline(paths, rebuild=None, tracker=None):
 
     print(f"  ✓ 完成 {len(alignment_records)} 个文本块的对齐判断")
 
-    # 将 alignment_status 写回 chunks_cache，供 Step 4 消费
+    # 将 alignment_status 写回 chunks_cache，供 混合检索精排 消费
     _EMOJI_TO_STATUS = {
         "✅": "consistent",
         "➕": "consistent",

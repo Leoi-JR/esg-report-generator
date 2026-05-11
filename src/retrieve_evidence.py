@@ -96,7 +96,7 @@ def load_framework_queries(framework_queries_path: str | None = None) -> list[di
     if queries and "code" not in queries[0]:
         raise RuntimeError(
             "framework_retrieval_queries.json 缺少 code 字段，格式已过期。\n"
-            "请重新运行 Step 3：python3 src/generate_retrieval_queries.py --project-dir <项目目录>"
+            "请重新运行 检索查询生成：python3 src/generate_retrieval_queries.py --project-dir <项目目录>"
         )
     print(f"  ✓ 加载报告框架叶节点：{len(queries)} 条")
     return queries
@@ -127,12 +127,12 @@ def embed_queries_dual(queries: list[dict]) -> tuple[np.ndarray, np.ndarray]:
     print(f"\n[步骤1] 双路 embedding 计算...")
 
     # ── 路径 1：retrieval_query（加 Instruct 前缀）──
-    # 若 retrieval_query 为 None，说明 Step 3 未成功生成，提前报错给出明确提示
+    # 若 retrieval_query 为 None，说明 检索查询生成 未成功生成，提前报错给出明确提示
     none_rq = [q.get("id", i) for i, q in enumerate(queries) if not q.get("retrieval_query")]
     if none_rq:
         raise ValueError(
             f"framework_retrieval_queries.json 中有 {len(none_rq)} 条节点的 retrieval_query 为空（如 {none_rq[:3]}...）。\n"
-            f"请先成功运行 Step 3（generate_retrieval_queries.py）再执行 Step 4。"
+            f"请先成功运行 检索查询生成（generate_retrieval_queries.py）再执行 混合检索精排。"
         )
 
     rq_texts = []

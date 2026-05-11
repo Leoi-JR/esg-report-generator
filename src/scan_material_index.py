@@ -311,7 +311,7 @@ def run_data_list(project_dir: str):
     target_folder = str(paths.materials_dir)
     output_dir = str(paths.processed_dir)
 
-    print("[信息] Step 0: 从参考Excel构建'编码 -> 议题/指标'映射...")
+    print("[信息] 文件夹模板生成: 从参考Excel构建'编码 -> 议题/指标'映射...")
     mapping, stats = load_esg_mapping_from_reference_excel(
         reference_excel_path=reference_excel,
         search_rows=200,
@@ -324,7 +324,7 @@ def run_data_list(project_dir: str):
     if stats["duplicate_codes_count"] > 0:
         print(f"  - duplicate_codes_count: {stats['duplicate_codes_count']}")
 
-    print("\n[信息] Step 1: 开始扫描资料文件夹并生成索引...")
+    print("\n[信息] 资料清单扫描: 开始扫描资料文件夹并生成索引...")
     generate_geds_inventory_final(target_folder, output_dir, mapping)
 
 

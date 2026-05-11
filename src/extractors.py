@@ -1456,14 +1456,14 @@ def _parse_sdk_markdown(markdown: str, titles_with_levels: list) -> list:
           "text": "...", "section_title": ""}, ...]
 
     算法:
-        Step 1: 将 Markdown 中的 # / ## 标题行匹配到 titles_with_levels，
+        资料清单扫描: 将 Markdown 中的 # / ## 标题行匹配到 titles_with_levels，
                 替换为真实层级
-        Step 2: 确定切割层级（复用 DOCX 的动态策略）
-        Step 3: 按 cut_level 分割 section
+        资料对齐质检: 确定切割层级（复用 DOCX 的动态策略）
+        检索查询生成: 按 cut_level 分割 section
     """
     lines = markdown.split("\n")
 
-    # ── Step 1: 标题行匹配 + 层级替换 ────────────────────────────────────────
+    # ── 资料清单扫描: 标题行匹配 + 层级替换 ────────────────────────────────────────
     # 构建标题文本到层级的映射（按顺序消费）
     title_queue = list(titles_with_levels)  # 复制，避免修改原列表
     title_idx = 0  # 下一个待匹配的标题索引
@@ -1498,7 +1498,7 @@ def _parse_sdk_markdown(markdown: str, titles_with_levels: list) -> list:
             "raw_line": line,
         })
 
-    # ── Step 2: 确定切割层级（复用 DOCX 动态策略） ───────────────────────────
+    # ── 资料对齐质检: 确定切割层级（复用 DOCX 动态策略） ───────────────────────────
     max_level = 0
     for rec in line_records:
         if rec["is_title"] and rec["level"] > max_level:
@@ -1520,7 +1520,7 @@ def _parse_sdk_markdown(markdown: str, titles_with_levels: list) -> list:
     # max_level >= 3 → cut_level = 2
     cut_level = 1 if max_level <= 2 else 2
 
-    # ── Step 3: 按 cut_level 分割 section ────────────────────────────────────
+    # ── 检索查询生成: 按 cut_level 分割 section ────────────────────────────────────
     sections = []
     current_l1     = ""      # 第1层标题（仅 cut_level=2 时用作 section_title）
     current_title  = ""      # 当前 section 的标题行
@@ -1828,12 +1828,12 @@ def _find_title_threshold(
     if not all_sizes or not para_records:
         return 0
 
-    # Step 1: P75 基础阈值（与原逻辑一致）
+    # 资料清单扫描: P75 基础阈值（与原逻辑一致）
     sorted_sizes = sorted(all_sizes)
     p_idx = int(len(sorted_sizes) * PDF_TITLE_SIZE_PERCENTILE)
     base_threshold = sorted_sizes[min(p_idx, len(sorted_sizes) - 1)]
 
-    # Step 2: 计算 block 级命中率
+    # 资料对齐质检: 计算 block 级命中率
     def _title_stats(threshold: float) -> tuple:
         """返回 (命中数, 总数, 占比)"""
         total = len(para_records)
@@ -1848,7 +1848,7 @@ def _find_title_threshold(
     if ratio <= PDF_TITLE_RATIO_MAX:
         return base_threshold if hits > 0 else 0
 
-    # Step 3: P75 命中率过高 → 逐级上探
+    # 检索查询生成: P75 命中率过高 → 逐级上探
     unique_sizes = sorted(set(all_sizes))
     higher_levels = [s for s in unique_sizes if s > base_threshold]
 
@@ -1857,7 +1857,7 @@ def _find_title_threshold(
         if hits > PDF_TITLE_MIN_COUNT and ratio <= PDF_TITLE_RATIO_MAX:
             return level
 
-    # Step 4: 所有更高字号都不满足 → 放弃标题切割
+    # 混合检索精排: 所有更高字号都不满足 → 放弃标题切割
     return 0
 
 

@@ -293,12 +293,12 @@ def generate_folder_structure(company_name, reference_excel, output_dir, pack_zi
     print(f"  清单: {os.path.basename(reference_excel)}")
     print("=" * 55)
 
-    # ── Step 1: 解析清单 ──────────────────────────────────────
+    # ── 资料清单扫描: 解析清单 ──────────────────────────────────────
     print("\n[1/4] 正在解析定性清单...")
     all_info = load_full_esg_info(reference_excel)
     print(f"      共解析到 {len(all_info)} 条编码记录")
 
-    # ── Step 2: 构建目录树结构（内存） ────────────────────────
+    # ── 资料对齐质检: 构建目录树结构（内存） ────────────────────────
     # 结构：{(dim_folder, sub_folder, code_folder): readme_content}
     # dim_folder  = "G-公司治理"
     # sub_folder  = "GA-可持续发展治理"（A类无sub_folder）
@@ -355,7 +355,7 @@ def generate_folder_structure(company_name, reference_excel, output_dir, pack_zi
         )
         tree.append((parts, readme))
 
-    # ── Step 3: 写出目录 ──────────────────────────────────────
+    # ── 检索查询生成: 写出目录 ──────────────────────────────────────
     base_tmp = os.path.join(tempfile.gettempdir(), root_name)
     # 清理可能残留的旧目录
     if os.path.exists(base_tmp):
@@ -410,7 +410,7 @@ def generate_folder_structure(company_name, reference_excel, output_dir, pack_zi
 
     print(f"      已创建编码文件夹: {created_code_dirs} 个，兜底文件夹: {len(extra_folders)} 个")
 
-    # ── Step 4: 打包 ZIP ──────────────────────────────────────
+    # ── 混合检索精排: 打包 ZIP ──────────────────────────────────────
     if pack_zip:
         zip_name = f"【{company_name}】ESG资料收集_文件夹模板_{stamp}.zip"
         zip_path = os.path.join(output_dir, zip_name)

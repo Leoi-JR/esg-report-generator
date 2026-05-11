@@ -96,7 +96,7 @@ class ProgressTracker:
             self._write()
 
     def set_substep(self, key: str, status: str):
-        """设置子步骤状态（用于 Step 5 章节级追踪）。
+        """设置子步骤状态（用于 报告初稿撰写 章节级追踪）。
 
         Args:
             key: 子步骤标识（如章节 id "r016"）

@@ -291,7 +291,7 @@ ENABLE_FOLDER_BOOST = True
 # 加权分值：RRF 分数范围约 0-3，0.5 约等于一路排名第 1 的贡献
 FOLDER_BOOST_SCORE = 0.5
 
-# Step 2 阶段四是否启用 embedding+BM25 双路 RRF 对齐（False 退回单路 embedding）
+# 资料对齐质检 阶段四是否启用 embedding+BM25 双路 RRF 对齐（False 退回单路 embedding）
 ENABLE_BM25_ALIGN = True
 
 # ==============================================================================
