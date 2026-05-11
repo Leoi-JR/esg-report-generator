@@ -1153,7 +1153,7 @@ def write_evaluation_sample(
         lines.append(f"- **retrieval_query**：{r['retrieval_query']}")
 
         # 显示 hypothetical_doc（截断显示前 300 字符）
-        hyde_text = r.get('hypothetical_doc', '')
+        hyde_text = r.get('hypothetical_doc') or ''
         hyde_display = hyde_text[:300] + "..." if len(hyde_text) > 300 else hyde_text
         lines.append(f"- **hypothetical_doc**：{hyde_display}")
 
