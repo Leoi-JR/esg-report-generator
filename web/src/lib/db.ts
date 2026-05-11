@@ -703,7 +703,7 @@ export function deletePlaygroundVersion(id: number): void {
   db.prepare('DELETE FROM playground_prompts WHERE id = ?').run(id);
 }
 
-/** 获取章节当前已采用的 prompt（供 Phase 2 generate_draft.py 读取）*/
+/** 获取章节当前已采用的 prompt（供 Phase 2 draft_report.py 读取）*/
 export function getActivePlaygroundPrompt(
   projectId: string,
   chapterId: string

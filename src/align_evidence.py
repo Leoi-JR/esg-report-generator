@@ -53,7 +53,7 @@ from esg_utils import (
     should_skip_content,
     extract_all_codes_from_string,
 )
-from data_list_v2 import load_esg_mapping_from_reference_excel, find_best_code_in_path
+from scan_material_index import load_esg_mapping_from_reference_excel, find_best_code_in_path
 from generate_folder_structure import load_full_esg_info
 from embedding_utils import compute_embeddings, embed_chunks
 from extractors import (
@@ -1415,7 +1415,7 @@ def validate_project_files(paths) -> list[str]:
     不抛出异常，允许流水线继续运行（仅提示，由用户判断是否修正）。
     """
     from generate_retrieval_queries import parse_excel
-    from data_list_v2 import load_esg_mapping_from_reference_excel
+    from scan_material_index import load_esg_mapping_from_reference_excel
 
     try:
         framework_records = parse_excel(paths.framework_xlsx)

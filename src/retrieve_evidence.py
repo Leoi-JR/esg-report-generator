@@ -1,7 +1,7 @@
 """
-generate_report_draft.py
+retrieve_evidence.py
 ========================
-ESG 报告初稿自动生成 — 步骤 1-4：双路语义检索 + Reranking。
+ESG 混合检索精排 — 三路 RRF 融合 + Reranker 精排，输出 retrieval_results.json。
 
 将 119 个报告框架叶节点通过两条检索路径与 ~5000 个企业资料文本块
 做语义匹配，为每个章节检索 top-K 最相关素材。
@@ -27,13 +27,13 @@ Reranker 通过 DashScope SDK 直接调用（无需额外启动服务）。
 
 运行：
   # 仅 bi-encoder（步骤 1-3）
-  conda run -n esg python3 src/generate_report_draft.py
+  conda run -n esg python3 src/retrieve_evidence.py
 
   # bi-encoder + reranker（步骤 1-4，通过 DashScope SDK 直接调用）
-  conda run -n esg python3 src/generate_report_draft.py --rerank
+  conda run -n esg python3 src/retrieve_evidence.py --rerank
 
   # 调整粗排/精排数量
-  conda run -n esg python3 src/generate_report_draft.py --rerank --biencoder-n 100 --top-k 15
+  conda run -n esg python3 src/retrieve_evidence.py --rerank --biencoder-n 100 --top-k 15
 """
 
 import argparse
@@ -1535,7 +1535,7 @@ def main():
     args = parser.parse_args()
 
     paths = get_paths(args.project_dir)
-    tracker = get_tracker(args, "generate_report_draft")
+    tracker = get_tracker(args, "retrieve_evidence")
 
     if args.no_rerank:
         use_rerank = False

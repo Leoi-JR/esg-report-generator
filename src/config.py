@@ -170,7 +170,7 @@ EMBEDDING_INSTRUCT = (
     "retrieve relevant document sections that provide evidence or data for this indicator"
 )
 
-# ── Reranker（DashScope qwen3-rerank，generate_report_draft.py 直接调用 SDK）──
+# ── Reranker（DashScope qwen3-rerank，retrieve_evidence.py 直接调用 SDK）──
 RERANKER_BASE_URL = os.environ.get("RERANKER_BASE_URL", "http://localhost:8083")
 RERANKER_MODEL    = os.environ.get("RERANKER_MODEL",    "qwen3-rerank")
 # DashScope qwen3-rerank RPM=5400，并发 10 足够保守
@@ -220,7 +220,7 @@ CONSISTENCY_TOPN = 5   # 路径编码在语义 Top-N 内 → 标记为 ✅（需
 EXTRA_RELEVANCE_THRESHOLD = 0.75  # ➕ 额外关联的相似度阈值（score > 此值且非 folder_code → 额外关联）
 MIN_RELEVANCE_SCORE = 0.40  # top1 相似度 < 此值 → 标记为 ➖ 低相关（不需审核）
 
-# ── 报告初稿生成检索参数（generate_report_draft.py）─────────────────────────
+# ── 混合检索精排参数（retrieve_evidence.py)─────────────────────────
 DRAFT_BIENCODER_TOP_N  = 50   # bi-encoder 粗排阶段每节点召回的候选数（送入 reranker）
 DRAFT_RERANKER_TOP_K   = 10   # reranker 精排后最终保留的 chunk 数（LLM 上下文）
 
@@ -247,14 +247,14 @@ VLM_CACHE_PATH = os.path.join(_ROOT, "data/processed/vlm_cache.json")
 
 
 # ==============================================================================
-# 6. 初稿生成配置（generate_draft.py）
+# 6. 初稿生成配置（draft_report.py）
 # ==============================================================================
 
 # ── LLM API 配置 ──────────────────────────────────────────────────────────────
 # 注意：OpenAI SDK 要求 base_url 包含 /v1 后缀
 DRAFT_LLM_BASE_URL = os.environ.get("LLM_BASE_URL", "https://dashscope.aliyuncs.com/compatible-mode/v1")
 DRAFT_LLM_API_KEY  = os.environ.get("LLM_API_KEY") or os.environ.get("DASHSCOPE_API_KEY", "")
-DRAFT_LLM_MODEL    = os.environ.get("LLM_MODEL",    "deepseek-v3.2")
+DRAFT_LLM_MODEL    = os.environ.get("LLM_MODEL",    "deepseek-v4-flash")
 
 # ── 并发与重试 ────────────────────────────────────────────────────────────────
 DRAFT_CONCURRENCY  = int(os.environ.get("DRAFT_CONCURRENCY", "6"))

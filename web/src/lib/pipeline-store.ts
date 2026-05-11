@@ -241,7 +241,7 @@ export const usePipelineStore = create<PipelineStore>((set, get) => ({
             useEditorStore.getState().setPipelineRunCompleted(true);
           }).catch(() => { /* editor store may not be loaded */ });
 
-          // 获取检索结果差异（若 generate_report_draft 刚刚完成，快照已就绪）
+          // 获取检索结果差异（若 retrieve_evidence 刚刚完成，快照已就绪）
           const { activeRun } = get();
           const configStr = activeRun?.run?.config;
           let project: string | undefined;

@@ -6,7 +6,7 @@ BM25 稀疏检索模块，与 Embedding 双路检索互补。
 Phase 3 新增模块：
   - 使用 rank_bm25 库 + jieba 中文分词
   - 懒加载索引，不持久化
-  - 与 generate_report_draft.py 的双路 Embedding 融合
+  - 与 retrieve_evidence.py 的双路 Embedding 融合
 
 使用方式：
   from bm25_retriever import build_bm25_index, bm25_search_batch

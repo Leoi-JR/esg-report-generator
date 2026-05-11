@@ -24,7 +24,7 @@ interface RetrievalEntry {
 
 /**
  * 将 top_chunks 格式化为 context_text + available_sources
- * 对应 generate_draft.py 的 prepare_context() 函数
+ * 对应 draft_report.py 的 prepare_context() 函数
  */
 function buildContext(entry: RetrievalEntry): {
   contextText: string;

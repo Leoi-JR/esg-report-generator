@@ -143,7 +143,7 @@ async function executeStepsSequentially(
       });
 
       // Step 3（检索）完成后保存快照，供后续差异对比
-      if (stepName === 'generate_report_draft') {
+      if (stepName === 'retrieve_evidence') {
         saveRetrievalSnapshot(projectDir);
       }
     } catch (err: unknown) {
@@ -382,7 +382,7 @@ function buildArgs(
     case 'align_evidence':
       if (config.rebuild) args.push('--rebuild', config.rebuild);
       break;
-    case 'generate_draft':
+    case 'draft_report':
       if (config.resume) args.push('--resume');
       if (config.limit) args.push('--limit', String(config.limit));
       if (config.debug) args.push('--debug');
@@ -391,7 +391,7 @@ function buildArgs(
       if (config.debug) args.push('--debug');
       if (config.retryFailed) args.push('--retry-failed');
       break;
-    // generate_report_draft 无额外参数
+    // retrieve_evidence 无额外参数
   }
 
   return args;

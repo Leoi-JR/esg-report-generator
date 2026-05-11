@@ -1,5 +1,5 @@
 """
-generate_draft.py
+draft_report.py
 =================
 ESG 报告初稿生成脚本。
 
@@ -11,7 +11,7 @@ ESG 报告初稿生成脚本。
 阶段4 → 输出 draft_results.json + draft_preview.md
 
 运行方式：
-    conda run -n esg python3 src/generate_draft.py
+    conda run -n esg python3 src/draft_report.py
 
 可选参数：
     --input PATH           检索结果文件（默认 data/processed/report_draft/retrieval_results.json）
@@ -663,7 +663,7 @@ async def main_async(args):
     effective_output_dir = args.output_dir if args.output_dir is not None else str(paths.draft_output_dir)
 
     # Web UI 进度追踪
-    tracker = get_tracker(args, "generate_draft")
+    tracker = get_tracker(args, "draft_report")
 
     # 耗时统计
     from stage_timer import StageTimer
@@ -972,7 +972,7 @@ def run_draft(paths, resume=False, limit=None, tracker=None):
 def main():
     """命令行入口。"""
     parser = argparse.ArgumentParser(
-        description="ESG 报告初稿生成",
+        description="ESG 报告初稿撰写",
         formatter_class=argparse.RawDescriptionHelpFormatter
     )
 

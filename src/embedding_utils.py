@@ -8,7 +8,7 @@ DashScope Text Embedding 通用工具模块。
   - embed_chunks()：为 chunk_records 批量计算 embedding
 
 此模块从 align_evidence.py 提取，供多个流水线脚本共用，
-避免 generate_report_draft.py 直接依赖 align_evidence 的内部实现。
+避免 retrieve_evidence.py 直接依赖 align_evidence 的内部实现。
 """
 
 import time

@@ -11,7 +11,7 @@ const SRC_DIR = path.join(PROJECT_ROOT, 'src');
  * POST /api/chapters/[id]/regenerate
  * body: { project: string }
  *
- * 对单个章节调用 generate_draft.py --chapter-ids <id>，
+ * 对单个章节调用 draft_report.py --chapter-ids <id>，
  * 完成后返回该章节的最新内容。
  *
  * 前提：retrieval_results.json 必须已存在（Step 3 已完成）。
@@ -58,8 +58,8 @@ export async function POST(
     return NextResponse.json({ error: '无法读取检索结果文件' }, { status: 500 });
   }
 
-  // 同步运行 generate_draft.py --chapter-ids <id>（单章节通常 10-30s）
-  const scriptPath = path.join(SRC_DIR, 'generate_draft.py');
+  // 同步运行 draft_report.py --chapter-ids <id>（单章节通常 10-30s）
+  const scriptPath = path.join(SRC_DIR, 'draft_report.py');
   const exitCode = await runDraftForChapter(id, paths.projectDir, scriptPath);
 
   if (exitCode !== 0) {
@@ -90,7 +90,7 @@ export async function POST(
 }
 
 /**
- * 使用 conda run 调用 generate_draft.py --chapter-ids <id>。
+ * 使用 conda run 调用 draft_report.py --chapter-ids <id>。
  * 超时 120 秒（单章节足够）。
  */
 function runDraftForChapter(
