@@ -2,6 +2,8 @@
 
 一个通用的 **ESG 报告自动生成系统**，将企业原始资料文件通过 AI 流水线转化为结构化报告初稿，并提供 Web 编辑平台进行人工审校与导出。
 
+> **在线演示** → [ESG Report Generator Demo](docs/showcase/index.html)
+
 ---
 
 ## 系统概览
@@ -13,7 +15,7 @@
     ↓
 三路混合检索（Embedding × 2 + BM25 + Reranker）
     ↓
-LLM 并发撰稿（119 章节）
+LLM 并发撰稿（多章节）
     ↓
 Web 平台编辑 + 导出 Word/Markdown
 ```
@@ -33,22 +35,25 @@ Web 平台编辑 + 导出 Word/Markdown
 ```
 esg-report-generator/
 ├── src/                          # Python 核心流水线
-│   ├── align_evidence.py         # Step 2：文本提取 + Embedding + 对齐
-│   ├── generate_retrieval_queries.py  # Step 3：LLM 生成检索查询
-│   ├── generate_report_draft.py  # Step 4：三路混合检索
-│   ├── generate_draft.py         # Step 5：LLM 并发撰稿
-│   ├── generate_folder_structure.py   # Step 0：生成文件夹模板 ZIP
+│   ├── align_evidence.py         # 文本提取 + Embedding + 对齐验证
+│   ├── generate_retrieval_queries.py  # LLM 生成检索查询
+│   ├── retrieve_evidence.py      # 三路混合检索（Embedding + BM25 + Reranker）
+│   ├── draft_report.py           # LLM 并发撰稿
+│   ├── generate_folder_structure.py   # 生成文件夹模板 ZIP
+│   ├── scan_material_index.py    # 扫描资料目录，生成索引
 │   ├── extractors.py             # 文件文本提取（多格式）
 │   ├── bm25_retriever.py         # BM25 稀疏检索
+│   ├── embedding_utils.py        # Embedding 工具函数
 │   ├── config.py                 # 全局配置（从环境变量读取）
 │   ├── esg_utils.py              # 共享工具函数
 │   ├── progress_tracker.py       # Web 进度同步
+│   ├── stage_timer.py            # 阶段计时工具
+│   ├── table_summarizer.py       # 表格 LLM 摘要
 │   └── prompts/                  # LLM Prompt 模板
 ├── web/                          # Next.js 编辑平台
 ├── templates/                    # ESG 框架模板（Excel）
-│   ├── ESG报告框架.xlsx           # 报告目录结构（119 叶节点）
-│   └── 资料收集清单.xlsx          # 指标定义（189 条编码）
-├── tests/                        # 单元测试
+│   ├── ESG报告框架.xlsx           # 报告目录结构
+│   └── 资料收集清单.xlsx          # 指标定义
 ├── docs/                         # 技术文档
 ├── .env.example                  # 环境变量示例
 ├── environment.yml               # Conda 环境配置
@@ -91,7 +96,7 @@ cp .env.example .env
 | `ZHIPU_API_KEY` | GLM-OCR 文档解析 | [智谱开放平台](https://open.bigmodel.cn) |
 | `LLM_BASE_URL` | LLM API 地址（OpenAI 兼容） | 自部署或第三方 |
 | `LLM_API_KEY` | LLM API Key | 同上 |
-| `LLM_MODEL` | 模型名称（如 `deepseek-v3.2`） | 同上 |
+| `LLM_MODEL` | 模型名称（如 `deepseek-v3`） | 同上 |
 
 ### 3. 准备项目目录
 
@@ -104,7 +109,7 @@ projects/示例企业_2025/
 │   ├── 资料收集清单.xlsx       ← 从 templates/ 复制并按需调整
 │   └── 整理后资料/            ← 按三级文件夹组织的企业资料
 │       ├── A-总体概况/
-│       │   ├── A1 企业LOGO/
+│       │   ├── A1/
 │       │   └── ...
 │       ├── G-公司治理/
 │       └── ...
@@ -127,17 +132,17 @@ conda run -n esg python3 src/generate_folder_structure.py \
 ```bash
 PROJECT=projects/示例企业_2025
 
-# Step 2：文本提取 + Embedding + 对齐验证
+# 文本提取 + Embedding + 对齐验证
 conda run -n esg python3 src/align_evidence.py --project-dir $PROJECT
 
-# Step 3：为报告框架生成检索查询（LLM）
+# 为报告框架生成检索查询（LLM）
 conda run -n esg python3 src/generate_retrieval_queries.py --project-dir $PROJECT
 
-# Step 4：三路混合检索（Embedding + BM25 + Reranker）
-conda run -n esg python3 src/generate_report_draft.py --project-dir $PROJECT
+# 三路混合检索（Embedding + BM25 + Reranker）
+conda run -n esg python3 src/retrieve_evidence.py --project-dir $PROJECT
 
-# Step 5：LLM 并发撰稿
-conda run -n esg python3 src/generate_draft.py --project-dir $PROJECT
+# LLM 并发撰稿
+conda run -n esg python3 src/draft_report.py --project-dir $PROJECT
 ```
 
 所有脚本均支持断点续跑（`--resume`）和调试模式（`--debug` / `--dry-run`）。
@@ -148,13 +153,13 @@ conda run -n esg python3 src/generate_draft.py --project-dir $PROJECT
 
 ```bash
 # 重算向量（换模型/改维度）
-python3 src/align_evidence.py --project-dir $PROJECT --rebuild embedding
+conda run -n esg python3 src/align_evidence.py --project-dir $PROJECT --rebuild embedding
 
 # 重新分块（改分块参数）
-python3 src/align_evidence.py --project-dir $PROJECT --rebuild chunk
+conda run -n esg python3 src/align_evidence.py --project-dir $PROJECT --rebuild chunk
 
 # 完全重建（资料文件有变化）
-python3 src/align_evidence.py --project-dir $PROJECT --rebuild all
+conda run -n esg python3 src/align_evidence.py --project-dir $PROJECT --rebuild all
 ```
 
 ---
@@ -201,7 +206,7 @@ query ──► RQ Embedding  ──┐
 | ⚠️ | 路径编码与语义结果不一致（疑似放错位置） |
 | 🔍 | 无路径标签但语义命中（未分类资料） |
 | ➕ | 额外关联（语义强相关，非主要归属） |
-| ➖ | 低相关（max score < 0.40，不需审核） |
+| ➖ | 低相关（不需审核） |
 
 ### 支持的文件格式
 
@@ -211,7 +216,7 @@ query ──► RQ Embedding  ──┐
 | PDF（扫描件） | 智谱 GLM-OCR layout_parsing API |
 | DOCX | python-docx，支持标题层级识别 |
 | DOC | LibreOffice 转 DOCX 后处理 |
-| XLSX / XLS | pandas，表格分块（≤30行/块） |
+| XLSX / XLS | pandas，表格分块 |
 | PPTX / PPT | python-pptx，含嵌入图片 |
 | JPG / PNG | DashScope qwen3-vl-plus 分类+描述 |
 
@@ -236,25 +241,17 @@ query ──► RQ Embedding  ──┐
 
 ## 配置参考
 
-所有参数集中在 `src/config.py`，均可通过环境变量覆盖：
+所有参数集中在 `src/config.py`，均可通过环境变量覆盖。主要参数包括：
 
-| 参数 | 默认值 | 说明 |
-|------|--------|------|
-| `CHUNK_MAX_SIZE` | 1200 | 分块最大字符数 |
-| `EMBEDDING_MODEL` | text-embedding-v4 | DashScope Embedding 模型 |
-| `EMBEDDING_DIM` | 2048 | 向量维度 |
-| `DRAFT_BIENCODER_TOP_N` | 50 | Reranker 输入候选数 |
-| `DRAFT_RERANKER_TOP_K` | 10 | Reranker 输出保留数 |
-| `DRAFT_CONCURRENCY` | 6 | LLM 并发数 |
-| `DRAFT_LLM_MODEL` | deepseek-v3.2 | 撰稿 LLM 模型 |
-
----
-
-## 运行测试
-
-```bash
-conda run -n esg python -m pytest tests/ -v
-```
+| 参数 | 说明 |
+|------|------|
+| `CHUNK_MAX_SIZE` | 分块最大字符数 |
+| `EMBEDDING_MODEL` | DashScope Embedding 模型 |
+| `EMBEDDING_DIM` | 向量维度 |
+| `DRAFT_BIENCODER_TOP_N` | Reranker 输入候选数 |
+| `DRAFT_RERANKER_TOP_K` | Reranker 输出保留数 |
+| `DRAFT_CONCURRENCY` | LLM 并发数 |
+| `DRAFT_LLM_MODEL` | 撰稿 LLM 模型 |
 
 ---
 
@@ -262,7 +259,7 @@ conda run -n esg python -m pytest tests/ -v
 
 | 文档 | 说明 |
 |------|------|
-| [项目工作链路](docs/项目工作链路.md) | 完整 7 步流水线、数据结构 |
+| [项目工作链路](docs/项目工作链路.md) | 完整流水线、数据结构 |
 | [三路检索架构](docs/双路检索与Reranker架构设计.md) | 检索算法设计 |
 | [文本分块逻辑](docs/文本分块逻辑详解.md) | 分块算法详解 |
 | [表格处理优化](docs/表格处理优化方案.md) | 表格三阶段优化 |
