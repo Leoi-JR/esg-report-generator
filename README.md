@@ -2,7 +2,9 @@
 
 一个通用的 **ESG 报告自动生成系统**，将企业原始资料文件通过 AI 流水线转化为结构化报告初稿，并提供 Web 编辑平台进行人工审校与导出。
 
-> **在线演示** → [ESG Report Generator Demo](https://leoi-jr.github.io/esg-report-generator/showcase/index.html)
+> **项目介绍** → [ESG Report Generator](https://leoi-jr.github.io/esg-report-generator/showcase/index.html)
+
+<video src="https://github.com/user-attachments/assets/536a26e8-f630-4255-9e07-45e5ead7149c" controls width="100%"></video>
 
 ---
 
