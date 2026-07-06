@@ -54,8 +54,6 @@ esg-report-generator/
 │   └── prompts/                  # LLM Prompt 模板
 ├── web/                          # Next.js 编辑平台
 ├── templates/                    # ESG 框架模板（Excel）
-│   ├── ESG报告框架.xlsx           # 报告目录结构
-│   └── 资料收集清单.xlsx          # 指标定义
 ├── docs/                         # 技术文档
 ├── .env.example                  # 环境变量示例
 ├── environment.yml               # Conda 环境配置
